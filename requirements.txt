@@ -1,0 +1,7 @@
+mujoco
+numpy
+scipy
+opencv-contrib-python
+roboticstoolbox-python
+matplotlib
+imageio[ffmpeg]
