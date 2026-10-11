@@ -4,14 +4,26 @@
 
 ## Installation
 
-Requires Python 3.12 and git.
+Requires git and either [uv](https://docs.astral.sh/uv/) (recommended) or Python 3.12.
 
 ```bash
 git clone --recursive https://github.com/treap45/AVRC.git
 cd AVRC
 # if cloned without --recursive:
 git submodule update --init --recursive
+```
 
+With uv (downloads a standalone Python 3.12 if needed):
+
+```bash
+uv venv --python 3.12 --seed .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+Or with plain pip:
+
+```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
