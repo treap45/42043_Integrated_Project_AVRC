@@ -42,8 +42,12 @@ Verify the environment:
 
 ```bash
 python scripts/check_env.py
-python -m mujoco.viewer --mjcf third_party/mujoco_menagerie/universal_robots_ur5e/scene.xml
+python scripts/check_scene.py
+python -m mujoco.viewer --mjcf assets/scene.xml
 ```
+
+In the viewer, load the `observe` keyframe to see the start pose. The arm actuators are torque motors,
+so with zero control the arm falls under gravity until a controller is running.
 
 ## Usage
 
@@ -54,5 +58,9 @@ python -m mujoco.viewer --mjcf third_party/mujoco_menagerie/universal_robots_ur5
 ## Contributions
 
 ## Generative AI Declaration
+
+Tool: Claude Code (Anthropic).
+
+Purpose: setting up the environment and the simulation (scene, simulation interface, sensor models, randomisation); writing test, demo and evaluation scripts; reviewing and revising the author's code; and explaining concepts. All AI-assisted code was reviewed and tested by the author.
 
 ## Acknowledgements

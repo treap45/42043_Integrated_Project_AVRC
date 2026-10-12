@@ -1,3 +1,6 @@
 [submodule "third_party/mujoco_menagerie"]
 	path = third_party/mujoco_menagerie
 	url = https://github.com/google-deepmind/mujoco_menagerie.git
+[submodule "third_party/universal_robots_ur3e"]
+	path = third_party/universal_robots_ur3e
+	url = https://github.com/SouthColumn76/universal_robots_ur3e.git
