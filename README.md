@@ -44,6 +44,8 @@ Verify the environment:
 python scripts/check_env.py
 python scripts/check_scene.py
 python scripts/check_sim.py
+python scripts/check_controller_model.py
+python scripts/check_joint_ss.py
 python -m mujoco.viewer --mjcf assets/scene.xml
 ```
 
