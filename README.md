@@ -43,6 +43,7 @@ Verify the environment:
 ```bash
 python scripts/check_env.py
 python scripts/check_scene.py
+python scripts/check_sim.py
 python -m mujoco.viewer --mjcf assets/scene.xml
 ```
 
@@ -50,6 +51,13 @@ In the viewer, load the `observe` keyframe to see the start pose. The arm actuat
 so with zero control the arm falls under gravity until a controller is running.
 
 ## Usage
+
+Live simulation view (overview, wrist RGB, wrist depth, encoder readings; press `r` to re-randomise, `q` to quit):
+
+```bash
+python scripts/demo_sim.py --level L1 --seed 0
+python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
+```
 
 ## Project Structure
 
