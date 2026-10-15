@@ -1,0 +1,246 @@
+"""Run the vision-guided pick-and-place: one command for the demo and for batches of trials.
+
+    python main.py                                  # live window, L0, seed 0, LQR
+    python main.py --seed 7 --level L1 --mode pd
+    python main.py --trials 20 --no-window          # seeds 0-19, prints a summary
+    python main.py --record videos/pick_place.mp4 --no-window
+
+The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
+here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
+the estimate on screen; it never reaches the estimator, planner or controller.
+"""
+
+import argparse
+import time
+from pathlib import Path
+
+import cv2
+import mujoco
+import numpy as np
+
+from src.control.arm_controller import ArmController
+from src.model.ur3e import UR3eModel
+from src.sim import TaskSim
+from src.sim.randomize import CUBE_HALF, TABLE_Z
+from src.task.pick_place import PickPlace
+
+FPS = 15
+PANEL_W, PANEL_H = 640, 480
+DEPTH_RANGE = (0.15, 0.8)  # metres, for the colour map
+
+# Success criteria from the project plan (section 6).
+LIFT_HEIGHT = 0.05  # m above the table
+LIFT_HOLD = 2.0  # s
+PLACE_TOL = 0.02  # m, cube centre to zone centre
+REST_TOL = 0.005  # m, cube centre height above its resting height
+
+
+class TrialMonitor:
+    """EVALUATION ONLY: reads ground truth to judge the trial against the success criteria."""
+
+    def __init__(self, sim: TaskSim):
+        self.sim = sim
+        self.lift_time = 0.0
+        self.max_lift_time = 0.0
+        # True cube pose at the moment of the latest cube estimate, so the error shown is the estimation
+        # error rather than how far the cube has since been carried.
+        self._estimate_seen = None
+        self.cube_truth_at_estimate = None
+
+    def step(self, pp: PickPlace) -> None:
+        if pp.cube_estimate is not None and pp.cube_estimate is not self._estimate_seen:
+            self._estimate_seen = pp.cube_estimate
+            gt = self.sim.ground_truth()
+            self.cube_truth_at_estimate = (gt["cube_pos"].copy(), 2 * np.arctan2(gt["cube_quat"][3], gt["cube_quat"][0]))
+        cube_z = self.sim.ground_truth()["cube_pos"][2]
+        if cube_z - (TABLE_Z + CUBE_HALF) > LIFT_HEIGHT:
+            self.lift_time += self.sim.dt
+            self.max_lift_time = max(self.max_lift_time, self.lift_time)
+        else:
+            self.lift_time = 0.0
+
+    def result(self) -> dict:
+        gt = self.sim.ground_truth()
+        place_err = float(np.linalg.norm(gt["cube_pos"][:2] - gt["zone_pos"][:2]))
+        resting = abs(gt["cube_pos"][2] - (TABLE_Z + CUBE_HALF)) < REST_TOL
+        grasped = self.max_lift_time >= LIFT_HOLD
+        return {
+            "grasped": grasped,
+            "placed": grasped and resting and place_err < PLACE_TOL,
+            "place_err": place_err,
+            "max_lift_time": self.max_lift_time,
+        }
+
+
+# ---- display -------------------------------------------------------------------------------------
+
+def depth_to_colour(depth: np.ndarray) -> np.ndarray:
+    lo, hi = DEPTH_RANGE
+    d = np.clip((depth - lo) / (hi - lo), 0, 1)
+    img = cv2.applyColorMap((255 * (1 - d)).astype(np.uint8), cv2.COLORMAP_TURBO)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
+def label(img: np.ndarray, text: str) -> np.ndarray:
+    cv2.rectangle(img, (0, 0), (len(text) * 11 + 12, 28), (0, 0, 0), -1)
+    cv2.putText(img, text, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    return img
+
+
+def put(img, text, x, y, colour=(230, 230, 230), scale=0.5):
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, colour, 1, cv2.LINE_AA)
+
+
+def info_panel(pp: PickPlace, monitor: TrialMonitor, seed: int, level: str, mode: str) -> np.ndarray:
+    img = np.full((PANEL_H, PANEL_W, 3), 30, np.uint8)
+    put(img, f"t = {pp.elapsed:5.2f} s   seed {seed}   level {level}   controller {mode.upper()}", 14, 24, scale=0.55)
+    put(img, f"state: {pp.state}", 14, 54, (150, 220, 150), 0.7)
+
+    gt = pp.sim.ground_truth()
+    put(img, "object            estimate            true*            error", 14, 92, (180, 180, 255))
+    cube = pp.cube_estimate
+    if cube is not None and cube.ok and monitor.cube_truth_at_estimate is not None:
+        true_pos, true_yaw = monitor.cube_truth_at_estimate
+        yaw_err = (cube.yaw - true_yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4
+        put(img, f"cube x,y (mm)   {cube.pos[0]*1e3:6.1f},{cube.pos[1]*1e3:6.1f}"
+                 f"   {true_pos[0]*1e3:6.1f},{true_pos[1]*1e3:6.1f}"
+                 f"   {np.linalg.norm(cube.pos[:2] - true_pos[:2])*1e3:5.1f} mm", 14, 118)
+        put(img, f"cube yaw (deg)  {np.rad2deg(cube.yaw):13.1f}   {np.rad2deg(true_yaw):13.1f}"
+                 f"   {abs(np.rad2deg(yaw_err)):5.2f} deg", 14, 142)
+    else:
+        put(img, "cube            not estimated yet", 14, 118)
+    zone = pp.zone_estimate
+    if zone is not None and np.all(np.isfinite(zone.xy)):
+        put(img, f"zone x,y (mm)   {zone.xy[0]*1e3:6.1f},{zone.xy[1]*1e3:6.1f}"
+                 f"   {gt['zone_pos'][0]*1e3:6.1f},{gt['zone_pos'][1]*1e3:6.1f}"
+                 f"   {np.linalg.norm(zone.xy - gt['zone_pos'][:2])*1e3:5.1f} mm", 14, 166)
+        put(img, f"zone fully observed: {zone.complete}", 14, 190, (200, 200, 200), 0.45)
+    else:
+        put(img, "zone            not estimated yet", 14, 166)
+
+    xhat = pp.ctrl.xhat
+    put(img, "joint   est. qd (deg/s)   true qd*   est. d (N m)", 14, 230, (180, 180, 255))
+    for i, name in enumerate(["pan", "lift", "elbow", "wrist1", "wrist2", "wrist3"]):
+        put(img, f"{name:7s} {np.rad2deg(xhat[i, 1]):12.2f} {np.rad2deg(gt['qd'][i]):12.2f} {xhat[i, 2]:12.2f}",
+            14, 254 + 22 * i)
+
+    put(img, f"cube lifted > 5 cm for {monitor.max_lift_time:4.1f} s", 14, 400, (200, 200, 200), 0.45)
+    put(img, "* true values: simulator ground truth, shown for evaluation only", 14, 446, (150, 150, 150), 0.42)
+    put(img, "  (cube: true pose at the time of the estimate)", 14, 466, (150, 150, 150), 0.42)
+    return img
+
+
+class Display:
+    """Composite view (overview, wrist RGB, wrist depth, status) shown live and/or written to video."""
+
+    def __init__(self, sim: TaskSim, window: bool, record: Path | None):
+        self.window = window
+        self.overview = mujoco.Renderer(sim.model, height=PANEL_H, width=PANEL_W)
+        self.writer = None
+        if record is not None:
+            import imageio.v2 as imageio
+
+            record.parent.mkdir(parents=True, exist_ok=True)
+            self.writer = imageio.get_writer(record, fps=FPS)
+        self.quit = False
+
+    def show(self, pp: PickPlace, monitor: TrialMonitor, seed: int, level: str, mode: str, wall_start: float):
+        rgb, depth = pp.sim.read_camera()
+        self.overview.update_scene(pp.sim.data, "overview")
+        top = np.hstack([label(self.overview.render().copy(), "overview"), label(rgb, "wrist RGB")])
+        bottom = np.hstack([label(depth_to_colour(depth), "wrist depth"), info_panel(pp, monitor, seed, level, mode)])
+        frame = np.vstack([top, bottom])
+        if self.writer is not None:
+            self.writer.append_data(frame)
+        if self.window:
+            lag = pp.elapsed - (time.perf_counter() - wall_start)  # pace the live view to real time
+            if lag > 0:
+                time.sleep(lag)
+            cv2.imshow("AVRC pick and place", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                self.quit = True
+
+    def close(self):
+        if self.writer is not None:
+            self.writer.close()
+        self.overview.close()
+        if self.window:
+            cv2.destroyAllWindows()
+
+
+# ---- trials ----------------------------------------------------------------------------------------
+
+def run_trial(sim, robot, seed, level, mode, timeout, display=None) -> dict:
+    sim.reset(seed, level)
+    ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
+    monitor = TrialMonitor(sim)
+    steps_per_frame = max(1, round(1.0 / (FPS * sim.dt)))
+    wall_start = time.perf_counter()
+    count = 0
+
+    def on_step(pp: PickPlace) -> None:
+        nonlocal count
+        monitor.step(pp)
+        count += 1
+        if display is not None and count % steps_per_frame == 0:
+            display.show(pp, monitor, seed, level, mode, wall_start)
+            if display.quit:
+                pp.timeout = 0.0  # ends the run at the next timeout check
+
+    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step)
+    outcome = pick_place.run(timeout=timeout)
+    result = monitor.result()
+    failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
+    return {"seed": seed, "pipeline_ok": outcome["ok"], "reason": outcome["reason"],
+            "failed_state": failed_state, "sim_time": outcome["elapsed"], **result}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--seed", type=int, default=0, help="first seed")
+    p.add_argument("--trials", type=int, default=1, help="number of consecutive seeds to run")
+    p.add_argument("--level", default="L0", choices=["L0", "L1", "L2"])
+    p.add_argument("--mode", default="lqr", choices=["lqr", "pd"], help="joint feedback law")
+    p.add_argument("--timeout", type=float, default=60.0, help="simulated seconds per trial")
+    p.add_argument("--record", type=Path, help="write an mp4 of the composite view")
+    p.add_argument("--no-window", action="store_true")
+    args = p.parse_args()
+
+    sim = TaskSim()
+    robot = UR3eModel()
+    show = not args.no_window
+    display = Display(sim, show, args.record) if (show or args.record) else None
+
+    results = []
+    try:
+        for seed in range(args.seed, args.seed + args.trials):
+            r = run_trial(sim, robot, seed, args.level, args.mode, args.timeout, display)
+            results.append(r)
+            verdict = "SUCCESS" if r["placed"] else "FAIL"
+            detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"
+            print(f"seed {seed:4d}  {verdict:7s}  grasped={r['grasped']!s:5s}  place error {r['place_err']*1e3:6.1f} mm"
+                  f"  sim time {r['sim_time']:5.1f} s{detail}", flush=True)
+            if display is not None and display.quit:
+                break
+    finally:
+        if display is not None:
+            display.close()
+        sim.close()
+
+    if len(results) > 1:
+        placed = [r for r in results if r["placed"]]
+        print(f"\n{args.level}, {args.mode.upper()}: {len(placed)}/{len(results)} placed, "
+              f"{sum(r['grasped'] for r in results)}/{len(results)} grasped")
+        if placed:
+            err = np.array([r["place_err"] for r in placed]) * 1e3
+            print(f"place error (successful trials): median {np.median(err):.1f} mm, max {err.max():.1f} mm")
+        failures = {}
+        for r in results:
+            if not r["placed"]:
+                failures.setdefault(r["failed_state"] or "criteria", []).append(r["seed"])
+        for state, seeds in failures.items():
+            print(f"failed in {state}: seeds {seeds}")
+
+
+if __name__ == "__main__":
+    main()

@@ -21,7 +21,8 @@ OBSERVE_TARGET_X = 0.33  # m, table point the camera looks at from the observe p
 class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
-    def __init__(self, sim, robot, ctrl):
+    def __init__(self, sim, robot, ctrl, on_step=None):
+        """on_step(pick_place) is called after every control period, for display and logging only."""
         self.sim = sim
         self.robot = robot
         self.ctrl = ctrl
@@ -30,12 +31,18 @@ class PickPlace:
         self.elapsed = 0.0
         self.records = []
         self.timeout = 60.0
+        self.on_step = on_step
+        self.state = "START"
+        self.cube_estimate = None
+        self.zone_estimate = None
 
     def _control_step(self, q_ref: np.ndarray, qd_ref: np.ndarray) -> None:
         y = self.sim.read_joint_positions()
         tau = self.ctrl.step(y, q_ref, qd_ref)
         self.sim.step(tau)
         self.elapsed += self.dt
+        if self.on_step is not None:
+            self.on_step(self)
 
     def _hold(
         self,
@@ -45,6 +52,7 @@ class PickPlace:
         gripper_closure: float | None = None,
     ) -> bool:
         """Hold a joint reference while continuing the feedback loop."""
+        self.state = name
         start_time = self.elapsed
         if q_hold is None:
             q_hold = self.ctrl.xhat[:, 0].copy()
@@ -81,6 +89,7 @@ class PickPlace:
         timeout_extra: float = 3.0,
     ) -> bool:
         """Execute one trajectory and wait for estimated settling."""
+        self.state = name
         start_time = self.elapsed
         traj_time = 0.0
         state_timeout = traj.T + timeout_extra
@@ -146,6 +155,10 @@ class PickPlace:
             points_w = camera_to_world(points_cv, cam_pos, cam_rot)
             zone_estimate = estimate_zone(points_w, zone_mask)
 
+        if cube_estimate is not None:
+            self.cube_estimate = cube_estimate
+        if zone_estimate is not None:
+            self.zone_estimate = zone_estimate
         return cube_estimate, zone_estimate
 
     def _move_joint(self, name: str, q_target: np.ndarray) -> bool:

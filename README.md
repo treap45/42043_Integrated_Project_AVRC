@@ -56,6 +56,16 @@ so with zero control the arm falls under gravity until a controller is running.
 
 ## Usage
 
+Vision-guided pick and place (live view of the overview camera, wrist RGB and depth, the current state, and
+estimates next to the true values; press `q` to quit). Ground truth is read only to judge success and for display:
+
+```bash
+python main.py                                  # L0, seed 0, LQR
+python main.py --seed 7 --level L1 --mode pd
+python main.py --trials 20 --no-window          # seeds 0-19, prints success rate and failure states
+python main.py --record videos/pick_place.mp4 --no-window
+```
+
 Live simulation view (overview, wrist RGB, wrist depth, joint estimates; press `r` to re-randomise, `q` to quit).
 The arm is driven by the joint controller from encoder readings only:
 
