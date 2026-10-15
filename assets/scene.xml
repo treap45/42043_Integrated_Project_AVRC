@@ -1,6 +1,6 @@
 <!--
   Task scene: UR3e + Robotiq 2F-85 + wrist-mounted RealSense D435 on a table, with a red cube,
-  a magenta place zone and up to three occluder boxes.
+  a magenta place zone, up to three occluder boxes and a camera calibration checkerboard (parked by default).
 
   Sources:
     - third_party/universal_robots_ur3e/ur3e.xml (BSD-3-Clause, github.com/SouthColumn76/universal_robots_ur3e,
@@ -78,6 +78,8 @@
     <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
              markrgb="0.8 0.8 0.8" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <texture type="2d" name="calib_board" file="calib_board.png"/>
+    <material name="calib_board" texture="calib_board"/>
     <material name="table_top" rgba="0.62 0.58 0.52 1"/>
     <material name="table_leg" rgba="0.35 0.35 0.35 1"/>
 
@@ -231,6 +233,14 @@
       <geom name="occluder_2" class="occluder" size="0.02 0.02 0.06"/>
     </body>
 
+    <!-- Camera calibration checkerboard: 10 x 7 squares of 20 mm with a one-square white margin, 3 mm thick,
+         visual only. Texture from scripts/make_calib_board.py (columns along the board x axis). Parked under
+         the floor; TaskSim.place_calib_board() moves it through data.mocap_pos / mocap_quat. -->
+    <body name="calib_board" mocap="true" pos="0.6 0.9 -1">
+      <geom name="calib_board" type="box" size="0.12 0.09 0.0015" material="calib_board"
+            contype="0" conaffinity="0"/>
+    </body>
+
     <!-- Fixed overview camera for videos. -->
     <camera name="overview" pos="1.3 -1.0 1.45" xyaxes="0.6 0.8 0 -0.35 0.26 0.9"/>
   </worldbody>
@@ -242,7 +252,7 @@
          qpos="-0.8264 -2.1217 1.4425 -1.1217 -1.3281 -0.7982
                0 0 0 0 0 0 0 0
                0.35 0 0.775 1 0 0 0"
-         mpos="0.3 0.25 0.7505  0 0.9 -1  0.2 0.9 -1  0.4 0.9 -1"/>
+         mpos="0.3 0.25 0.7505  0 0.9 -1  0.2 0.9 -1  0.4 0.9 -1  0.6 0.9 -1"/>
   </keyframe>
 
   <actuator>
