@@ -1,9 +1,9 @@
 """Per-trial randomisation of the task scene.
 
 A trial is fully determined by (seed, level). Difficulty levels follow the project plan:
-    L0  no occluders
-    L1  one occluder near the cube
-    L2  two or three occluders near the cube
+    L0  no occluders; the place zone lies fully inside the wrist camera's view from the "observe" keyframe
+    L1  one occluder near the cube; the place zone may lie anywhere in its range
+    L2  two or three occluders near the cube; the place zone may lie anywhere in its range
 L3 (cube fully hidden from the initial view) is not implemented.
 """
 
@@ -19,6 +19,7 @@ N_OCCLUDERS = 3
 PARK_POS = np.array([0.0, 0.9, -1.0])  # unused occluders are parked under the floor
 
 LEVEL_OCCLUDERS = {"L0": (0, 0), "L1": (1, 1), "L2": (2, 3)}
+LEVEL_ZONE_IN_VIEW = {"L0": True, "L1": False, "L2": False}
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,10 @@ class WorkspaceConfig:
     cube_yaw: tuple = (-np.pi / 4, np.pi / 4)
     zone_x: tuple = (0.20, 0.42)
     zone_y: tuple = (-0.28, 0.28)
+    # Zone-centre range for which the whole zone is in the wrist image from "observe" (computed by projecting
+    # its corners with the nominal intrinsics: x 0.27-0.44, y +/-0.155 with an 8 px margin), slightly shrunk.
+    zone_x_in_view: tuple = (0.28, 0.42)
+    zone_y_in_view: tuple = (-0.15, 0.15)
     zone_min_dist: float = 0.15  # zone centre to cube centre
     occ_dist: tuple = (0.07, 0.12)  # occluder centre to cube centre
     occ_half_xy: tuple = (0.02, 0.04)
@@ -98,8 +103,12 @@ def sample_trial(seed: int, level: str = "L0", ws: WorkspaceConfig = WorkspaceCo
         raise RuntimeError(f"could not place {n_occ} occluders for seed {seed}")
 
     zone_r = np.sqrt(2) * ZONE_HALF
+    if LEVEL_ZONE_IN_VIEW[level]:
+        zone_x, zone_y = ws.zone_x_in_view, ws.zone_y_in_view
+    else:
+        zone_x, zone_y = ws.zone_x, ws.zone_y
     for _ in range(ws.max_tries):
-        zone_xy = np.array([u(ws.zone_x), u(ws.zone_y)])
+        zone_xy = np.array([u(zone_x), u(zone_y)])
         if np.linalg.norm(zone_xy - cube_xy) < ws.zone_min_dist:
             continue
         if any(np.hypot(zone_xy[0] - o.x, zone_xy[1] - o.y) < zone_r + o.radius + ws.clearance for o in occluders):
