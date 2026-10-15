@@ -6,6 +6,7 @@ import numpy as np
 
 CUBE_SIDE = 0.050
 CUBE_HALF_HEIGHT = 0.025
+EDGE_TRIM_PCT = 0.5  # percent of top-face points trimmed on each side before the rectangle fit
 
 
 @dataclass(frozen=True)
@@ -50,8 +51,21 @@ def estimate_cube(
     if len(top) < min_top_points:
         return _invalid_estimate()
 
+    # minAreaRect encloses every point, so a few outliers can inflate it. Depth noise moves points along the
+    # viewing ray, which is slanted away from the image centre, so some top-face points land millimetres
+    # outside the true edge. Trim the extreme EDGE_TRIM_PCT percent on each side in the frame of a first
+    # fit, then fit again on the points that remain.
+    xy = top[:, :2]
+    _, _, angle0 = cv2.minAreaRect(xy.astype(np.float32))
+    c, s = np.cos(np.deg2rad(angle0)), np.sin(np.deg2rad(angle0))
+    local = xy @ np.array([[c, -s], [s, c]])
+    lo, hi = np.percentile(local, [EDGE_TRIM_PCT, 100.0 - EDGE_TRIM_PCT], axis=0)
+    inliers = np.all((local >= lo) & (local <= hi), axis=1)
+    if np.count_nonzero(inliers) < min_top_points:
+        return _invalid_estimate()
+
     (cx, cy), (width, height), angle_deg = cv2.minAreaRect(
-        top[:, :2].astype(np.float32)
+        xy[inliers].astype(np.float32)
     )
 
     yaw = (

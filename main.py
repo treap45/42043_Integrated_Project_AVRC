@@ -4,6 +4,7 @@
     python main.py --seed 7 --level L1 --mode pd
     python main.py --trials 20 --no-window          # seeds 0-19, prints a summary
     python main.py --record videos/pick_place.mp4 --no-window
+    python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -20,11 +21,11 @@ import numpy as np
 
 from src.control.arm_controller import ArmController
 from src.model.ur3e import UR3eModel
-from src.sim import TaskSim
+from src.sim import CameraNoiseConfig, TaskSim
 from src.sim.randomize import CUBE_HALF, TABLE_Z
 from src.task.pick_place import PickPlace
 
-FPS = 15
+FPS = 30
 PANEL_W, PANEL_H = 640, 480
 DEPTH_RANGE = (0.15, 0.8)  # metres, for the colour map
 
@@ -145,7 +146,7 @@ class Display:
         self.quit = False
 
     def show(self, pp: PickPlace, monitor: TrialMonitor, seed: int, level: str, mode: str, wall_start: float):
-        rgb, depth = pp.sim.read_camera()
+        rgb, depth = pp.sim.read_camera_for_display()
         self.overview.update_scene(pp.sim.data, "overview")
         top = np.hstack([label(self.overview.render().copy(), "overview"), label(rgb, "wrist RGB")])
         bottom = np.hstack([label(depth_to_colour(depth), "wrist depth"), info_panel(pp, monitor, seed, level, mode)])
@@ -204,9 +205,11 @@ def main():
     p.add_argument("--timeout", type=float, default=60.0, help="simulated seconds per trial")
     p.add_argument("--record", type=Path, help="write an mp4 of the composite view")
     p.add_argument("--no-window", action="store_true")
+    p.add_argument("--no-camera-noise", action="store_true",
+                   help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
     args = p.parse_args()
 
-    sim = TaskSim()
+    sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig())
     robot = UR3eModel()
     show = not args.no_window
     display = Display(sim, show, args.record) if (show or args.record) else None

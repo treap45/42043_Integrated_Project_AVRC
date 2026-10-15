@@ -48,6 +48,8 @@ python scripts/check_controller_model.py
 python scripts/check_joint_ss.py
 python scripts/check_joint_kf.py
 python scripts/check_control.py
+python scripts/check_camera_noise.py
+python scripts/check_calib_board.py
 python -m mujoco.viewer --mjcf assets/scene.xml
 ```
 
@@ -56,13 +58,14 @@ so with zero control the arm falls under gravity until a controller is running.
 
 ## Usage
 
-Vision-guided pick and place (live view of the overview camera, wrist RGB and depth, the current state, and
+Vision-guided pick and place with the noisy wrist RGB-D camera (live view of the overview camera, wrist RGB and depth, the current state, and
 estimates next to the true values; press `q` to quit). Ground truth is read only to judge success and for display:
 
 ```bash
 python main.py                                  # L0, seed 0, LQR
 python main.py --seed 7 --level L1 --mode pd
 python main.py --trials 20 --no-window          # seeds 0-19, prints success rate and failure states
+python main.py --no-camera-noise                # exact wrist RGB-D (by default the camera is noisy)
 python main.py --record videos/pick_place.mp4 --no-window
 ```
 
@@ -88,3 +91,10 @@ Tool: Claude Code (Anthropic).
 Purpose: setting up the environment and the simulation (scene, simulation interface, sensor models, randomisation); writing test, demo and evaluation scripts; reviewing and revising the author's code; and explaining concepts. All AI-assisted code was reviewed and tested by the author.
 
 ## Acknowledgements
+
+- **Robot model:** UR3e MJCF from [SouthColumn76/universal_robots_ur3e](https://github.com/SouthColumn76/universal_robots_ur3e) (BSD-3-Clause), the model used in the course tutorial [rFalque/mujoco_UR3_tutorial](https://github.com/rFalque/mujoco_UR3_tutorial); arm actuators changed to torque motors (see the header of `assets/scene.xml`).
+- **Gripper and camera models:** Robotiq 2F-85 (BSD-2-Clause) and RealSense D435i (Apache-2.0) from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie).
+- **Simulator:** [MuJoCo](https://mujoco.org) (rendering, physics, and the controller-side model for kinematics and dynamics).
+- **OpenCV:** colour segmentation (HSV conversion, morphology, connected components), `minAreaRect`, checkerboard detection (`findChessboardCornersSB`), `calibrateCamera`, `solvePnP` and `calibrateHandEye` (Park and Martin method: F. C. Park and B. J. Martin, "Robot sensor calibration: solving AX = XB on the Euclidean group", IEEE Trans. Robotics and Automation, 1994).
+- **SciPy:** `solve_discrete_are` (LQR gains), `expm` (discretisation and Van Loan process noise), `CubicSpline` (Cartesian paths).
+- **Robotics Toolbox for Python:** used only in the environment check `scripts/check_env.py`; the pipeline does not use it.
