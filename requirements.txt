@@ -1,7 +1,7 @@
 mujoco
 numpy
 scipy
-opencv-contrib-python
+opencv-contrib-python>=4.8,<5  # 5.0 has no cv2.calibrateHandEye
 roboticstoolbox-python
 matplotlib
 imageio[ffmpeg]
