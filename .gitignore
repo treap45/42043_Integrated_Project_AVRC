@@ -5,3 +5,4 @@ __pycache__/
 results/
 videos/
 screenshots/
+MUJOCO_LOG.TXT

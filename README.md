@@ -46,6 +46,8 @@ python scripts/check_scene.py
 python scripts/check_sim.py
 python scripts/check_controller_model.py
 python scripts/check_joint_ss.py
+python scripts/check_joint_kf.py
+python scripts/check_control.py
 python -m mujoco.viewer --mjcf assets/scene.xml
 ```
 
@@ -54,10 +56,12 @@ so with zero control the arm falls under gravity until a controller is running.
 
 ## Usage
 
-Live simulation view (overview, wrist RGB, wrist depth, encoder readings; press `r` to re-randomise, `q` to quit):
+Live simulation view (overview, wrist RGB, wrist depth, joint estimates; press `r` to re-randomise, `q` to quit).
+The arm is driven by the joint controller from encoder readings only:
 
 ```bash
-python scripts/demo_sim.py --level L1 --seed 0
+python scripts/demo_sim.py --level L1                    # PD, hold the observe pose
+python scripts/demo_sim.py --level L2 --mode lqr --motion  # LQR, track a slow sinusoidal reference
 python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
 ```
 
