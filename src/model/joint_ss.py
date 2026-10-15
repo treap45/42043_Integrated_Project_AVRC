@@ -1,15 +1,3 @@
-"""Per-joint linear state-space model used by the joint observer and controller.
-
-Each joint i is modelled as a double integrator driven by the feedback torque u_i and a lumped torque
-disturbance d_i (after gravity compensation with the controller-side model):
-
-    J_i * qdd_i = u_i + d_i,        x_i = [q_i, qd_i, d_i]^T,    y_i = q_i
-
-d_i collects everything the decoupled model ignores: joint coupling, Coriolis terms, the unmodelled
-payload's gravity and friction. It is assumed constant between samples (d_dot = 0); its variation is
-left to the process noise of the observer. J_i = M_ii(q_op) of the payload-free controller model,
-including joint armature.
-"""
 
 from dataclasses import dataclass
 from functools import cached_property
