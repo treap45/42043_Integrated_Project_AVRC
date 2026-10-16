@@ -5,6 +5,7 @@
     python main.py --trials 20 --no-window          # seeds 0-19, prints a summary
     python main.py --record videos/pick_place.mp4 --no-window
     python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
+    python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -21,13 +22,13 @@ import numpy as np
 
 from src.control.arm_controller import ArmController
 from src.model.ur3e import UR3eModel
+from src.perception.camera_model import CameraModel
 from src.sim import CameraNoiseConfig, TaskSim
 from src.sim.randomize import CUBE_HALF, TABLE_Z
 from src.task.pick_place import PickPlace
 
 FPS = 30
 PANEL_W, PANEL_H = 640, 480
-DEPTH_RANGE = (0.15, 0.8)  # metres, for the colour map
 
 # Success criteria from the project plan (section 6).
 LIFT_HEIGHT = 0.05  # m above the table
@@ -76,10 +77,19 @@ class TrialMonitor:
 # ---- display -------------------------------------------------------------------------------------
 
 def depth_to_colour(depth: np.ndarray) -> np.ndarray:
-    lo, hi = DEPTH_RANGE
-    d = np.clip((depth - lo) / (hi - lo), 0, 1)
-    img = cv2.applyColorMap((255 * (1 - d)).astype(np.uint8), cv2.COLORMAP_TURBO)
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    """Grayscale depth for display: near is bright, far is dark; invalid pixels (0) are black.
+
+    The scale follows each frame (5th to 99th percentile of the valid depths, so the gripper fingers at the
+    image bottom do not set it), because the scene spans
+    0.1 m when the cube is held and 0.4 m at the observe pose."""
+    valid = depth > 0
+    if not np.any(valid):
+        return np.zeros((*depth.shape, 3), np.uint8)
+    lo, hi = np.percentile(depth[valid], [5, 99])
+    d = np.clip((depth - lo) / max(hi - lo, 1e-3), 0, 1)
+    gray = (255 * (1 - d)).astype(np.uint8)
+    gray[depth <= 0] = 0
+    return np.repeat(gray[..., None], 3, axis=2)
 
 
 def label(img: np.ndarray, text: str) -> np.ndarray:
@@ -96,6 +106,8 @@ def info_panel(pp: PickPlace, monitor: TrialMonitor, seed: int, level: str, mode
     img = np.full((PANEL_H, PANEL_W, 3), 30, np.uint8)
     put(img, f"t = {pp.elapsed:5.2f} s   seed {seed}   level {level}   controller {mode.upper()}", 14, 24, scale=0.55)
     put(img, f"state: {pp.state}", 14, 54, (150, 220, 150), 0.7)
+    noise = "noisy" if pp.sim.camera_noise is not None else "exact"
+    put(img, f"camera: {pp.camera.source}, {noise}", 410, 54, (200, 200, 200), 0.45)
 
     gt = pp.sim.ground_truth()
     put(img, "object            estimate            true*            error", 14, 92, (180, 180, 255))
@@ -171,7 +183,7 @@ class Display:
 
 # ---- trials ----------------------------------------------------------------------------------------
 
-def run_trial(sim, robot, seed, level, mode, timeout, display=None) -> dict:
+def run_trial(sim, robot, camera, seed, level, mode, timeout, display=None) -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
     monitor = TrialMonitor(sim)
@@ -188,7 +200,7 @@ def run_trial(sim, robot, seed, level, mode, timeout, display=None) -> dict:
             if display.quit:
                 pp.timeout = 0.0  # ends the run at the next timeout check
 
-    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step)
+    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera)
     outcome = pick_place.run(timeout=timeout)
     result = monitor.result()
     failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
@@ -207,17 +219,20 @@ def main():
     p.add_argument("--no-window", action="store_true")
     p.add_argument("--no-camera-noise", action="store_true",
                    help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
+    p.add_argument("--nominal-camera", action="store_true",
+                   help="nominal K and camera mount instead of configs/camera_calib.json")
     args = p.parse_args()
 
     sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig())
     robot = UR3eModel()
+    camera = CameraModel.nominal(robot) if args.nominal_camera else CameraModel.from_calibration()
     show = not args.no_window
     display = Display(sim, show, args.record) if (show or args.record) else None
 
     results = []
     try:
         for seed in range(args.seed, args.seed + args.trials):
-            r = run_trial(sim, robot, seed, args.level, args.mode, args.timeout, display)
+            r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout, display)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"

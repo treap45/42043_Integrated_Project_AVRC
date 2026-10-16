@@ -11,8 +11,8 @@ evaluate_* functions.
    the simulator state.
 
 Run from the repo root with the venv active:
-    python scripts/calibrate_camera.py
-    python scripts/calibrate_camera.py --camera-noise
+    python scripts/calibrate_camera.py                     # noisy wrist RGB-D, like main.py
+    python scripts/calibrate_camera.py --no-camera-noise   # exact images
 """
 
 import argparse
@@ -252,10 +252,10 @@ def evaluate_hand_eye(sim: TaskSim, robot: UR3eModel, R_ee_cam: np.ndarray, t_ee
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--camera-noise", action="store_true", help="noisy wrist RGB-D")
+    p.add_argument("--no-camera-noise", action="store_true", help="exact wrist RGB-D (noisy by default)")
     args = p.parse_args()
 
-    sim = TaskSim(camera_noise=CameraNoiseConfig() if args.camera_noise else None)
+    sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig())
     robot = UR3eModel()
     rng = np.random.default_rng(SEED)
 
@@ -284,7 +284,7 @@ def main() -> None:
         "R_ee_cam": np.asarray(R_ee_cam).tolist(),
         "t_ee_cam": np.ravel(t_ee_cam).tolist(),
         "camera_frame": "OpenCV (+z forward, +y down)",
-        "camera_noise": args.camera_noise,
+        "camera_noise": not args.no_camera_noise,
     }, indent=2))
     print(json.dumps({"intrinsics": intrinsic_report, "hand_eye": hand_eye_report}, indent=2))
     print(f"saved {OUT}")

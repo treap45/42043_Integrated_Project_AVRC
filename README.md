@@ -58,7 +58,7 @@ so with zero control the arm falls under gravity until a controller is running.
 
 ## Usage
 
-Vision-guided pick and place with the noisy wrist RGB-D camera (live view of the overview camera, wrist RGB and depth, the current state, and
+Vision-guided pick and place with the noisy wrist RGB-D camera and the calibrated camera parameters (live view of the overview camera, wrist RGB and depth, the current state, and
 estimates next to the true values; press `q` to quit). Ground truth is read only to judge success and for display:
 
 ```bash
@@ -66,6 +66,8 @@ python main.py                                  # L0, seed 0, LQR
 python main.py --seed 7 --level L1 --mode pd
 python main.py --trials 20 --no-window          # seeds 0-19, prints success rate and failure states
 python main.py --no-camera-noise                # exact wrist RGB-D (by default the camera is noisy)
+python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
+python scripts/calibrate_camera.py              # recalibrate: writes configs/camera_calib.json used by main.py
 python main.py --record videos/pick_place.mp4 --no-window
 ```
 

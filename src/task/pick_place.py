@@ -2,7 +2,8 @@ import numpy as np
 
 from src.perception.cube_pose import estimate_cube
 from src.perception.place_zone import estimate_zone
-from src.perception.projection import K_NOMINAL, backproject, camera_to_world
+from src.perception.camera_model import CameraModel
+from src.perception.projection import backproject, camera_to_world
 from src.perception.segmentation import (
     CUBE_HSV,
     ZONE_HSV,
@@ -21,11 +22,13 @@ OBSERVE_TARGET_X = 0.33  # m, table point the camera looks at from the observe p
 class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
-    def __init__(self, sim, robot, ctrl, on_step=None):
-        """on_step(pick_place) is called after every control period, for display and logging only."""
+    def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None):
+        """on_step(pick_place) is called after every control period, for display and logging only.
+        camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values."""
         self.sim = sim
         self.robot = robot
         self.ctrl = ctrl
+        self.camera = camera if camera is not None else CameraModel.nominal(robot)
         self.dt = sim.dt
         self.q_observe = ctrl.xhat[:, 0].copy()
         self.elapsed = 0.0
@@ -132,7 +135,7 @@ class PickPlace:
         """Capture one stopped-arm frame and estimate the cube and placement zone."""
         rgb, depth = self.sim.read_camera()
         qhat = self.ctrl.xhat[:, 0].copy()
-        cam_pos, cam_rot = self.robot.camera_pose(qhat)
+        cam_pos, cam_rot = self.camera.pose(self.robot, qhat)
 
         cube_mask = largest_component(
             color_mask(rgb, **CUBE_HSV),
@@ -145,13 +148,13 @@ class PickPlace:
 
         cube_estimate = None
         if cube_mask is not None:
-            points_cv = backproject(cube_mask, depth, K_NOMINAL)
+            points_cv = backproject(cube_mask, depth, self.camera.K)
             points_w = camera_to_world(points_cv, cam_pos, cam_rot)
             cube_estimate = estimate_cube(points_w)
 
         zone_estimate = None
         if zone_mask is not None:
-            points_cv = backproject(zone_mask, depth, K_NOMINAL)
+            points_cv = backproject(zone_mask, depth, self.camera.K)
             points_w = camera_to_world(points_cv, cam_pos, cam_rot)
             zone_estimate = estimate_zone(points_w, zone_mask)
 
