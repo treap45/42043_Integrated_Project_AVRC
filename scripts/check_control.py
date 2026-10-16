@@ -13,9 +13,11 @@ The controller only ever sees y and the reference. Ground truth is read here for
 impulse is injected into the plant through qfrc_applied (an external disturbance, not a control input).
 
 Run from the repo root with the venv active:
-    python scripts/check_control.py
+    python scripts/check_control.py              # LQR, plots in results/check_control_lqr/
+    python scripts/check_control.py --mode pd    # PD, plots in results/check_control/
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -25,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.model.ur3e import N_JOINTS, UR3eModel  # noqa: E402
 from src.sim import TaskSim  # noqa: E402
 
-OUT_DIR = Path(__file__).resolve().parents[1] / "results/check_control"
+RESULTS = Path(__file__).resolve().parents[1] / "results"
+MODE = "lqr"  # set from --mode in main()
 JOINTS = ["pan", "lift", "elbow", "wrist1", "wrist2", "wrist3"]
 
 HOLD_S = 5.0
@@ -43,7 +46,12 @@ def make_controller(robot: UR3eModel, dt: float, y0: np.ndarray):
     """Build the controller under test. Edit to match the ArmController constructor."""
     from src.control.arm_controller import ArmController
 
-    return ArmController(robot=robot, dt=dt, y0=y0)
+    return ArmController(robot=robot, dt=dt, y0=y0, mode=MODE)
+
+
+def out_dir() -> Path:
+    """PD plots keep the original folder; LQR plots go to check_control_lqr."""
+    return RESULTS / ("check_control" if MODE == "pd" else "check_control_lqr")
 
 
 def quintic(q0, q1, T, t):
@@ -139,14 +147,19 @@ def plot(name, log, extra_title=""):
         ax.grid(True, alpha=0.3)
     fig.suptitle(f"{name} {extra_title}")
     fig.tight_layout()
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"{name}.png"
+    out_dir().mkdir(parents=True, exist_ok=True)
+    path = out_dir() / f"{name}.png"
     fig.savefig(path, dpi=100)
     plt.close(fig)
     return path
 
 
 def main():
+    global MODE
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--mode", default="lqr", choices=["lqr", "pd"], help="joint feedback law")
+    MODE = p.parse_args().mode
+    print(f"controller mode: {MODE}\n")
     np.set_printoptions(precision=4, suppress=True)
     try:
         robot = UR3eModel()

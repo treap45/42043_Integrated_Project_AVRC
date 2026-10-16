@@ -47,7 +47,7 @@ python scripts/check_sim.py
 python scripts/check_controller_model.py
 python scripts/check_joint_ss.py
 python scripts/check_joint_kf.py
-python scripts/check_control.py
+python scripts/check_control.py             # LQR; add --mode pd for the PD baseline
 python scripts/check_camera_noise.py
 python scripts/check_calib_board.py
 python -m mujoco.viewer --mjcf assets/scene.xml
@@ -67,8 +67,9 @@ python main.py --seed 7 --level L1 --mode pd
 python main.py --trials 20 --no-window          # seeds 0-19, prints success rate and failure states
 python main.py --no-camera-noise                # exact wrist RGB-D (by default the camera is noisy)
 python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
-python main.py --approach open                  # look-then-move instead of PBVS for the approach
-python main.py --push-cube 0.025 --trials 20 --no-window   # experiment: push the cube 25 mm as the approach starts
+python main.py --approach pbvs                  # PBVS for the approach (default: look-then-move)
+python main.py --approach pbvs --push-cube 0.025           # push the cube 25 mm as the approach starts
+python main.py --push-cube 0.025 --trials 20 --no-window   # same push with look-then-move, for comparison
 python scripts/calibrate_camera.py              # recalibrate: writes configs/camera_calib.json used by main.py
 python main.py --record videos/pick_place.mp4 --no-window
 ```
@@ -77,8 +78,8 @@ Live simulation view (overview, wrist RGB, wrist depth, joint estimates; press `
 The arm is driven by the joint controller from encoder readings only:
 
 ```bash
-python scripts/demo_sim.py --level L1                    # PD, hold the observe pose
-python scripts/demo_sim.py --level L2 --mode lqr --motion  # LQR, track a slow sinusoidal reference
+python scripts/demo_sim.py --level L1                    # LQR, hold the observe pose
+python scripts/demo_sim.py --level L2 --mode pd --motion   # PD, track a slow sinusoidal reference
 python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
 ```
 

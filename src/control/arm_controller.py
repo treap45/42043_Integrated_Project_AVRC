@@ -4,14 +4,16 @@ Each control period:
 
     tau = clip( g_hat(q_hat) + u_fb(q_hat - q_ref, qd_hat - qd_ref) - d_hat ,  +/- TORQUE_LIMIT )
 
-g_hat comes from the payload-free controller-side model, u_fb is PD or LQR feedback on the estimated
-state, and -d_hat cancels the estimated lumped disturbance (joint model: J * qdd = u + d). The observer is
-then propagated with the torque that was actually applied, u = clip(tau) - g_hat.
+g_hat comes from the payload-free controller-side model, u_fb is LQR (joint_lqr.py, default) or PD
+(pid.py) feedback on the estimated state, and -d_hat cancels the estimated lumped disturbance (joint model:
+J * qdd = u + d). The observer is then propagated with the torque that was actually applied,
+u = clip(tau) - g_hat.
 """
 
 import numpy as np
 
 from src.control.joint_lqr import ArmLQR
+from src.control.pid import ArmPD
 from src.estimation.joint_kf import ArmObserver
 from src.model.joint_ss import build_joint_models
 from src.model.ur3e import N_JOINTS, UR3eModel
@@ -28,7 +30,7 @@ class ArmController:
         robot: UR3eModel,
         dt: float,
         y0: np.ndarray,
-        mode: str = "pd",
+        mode: str = "lqr",
         sigma_d=(30.0, 30.0, 20.0, 10.0, 8.0, 8.0),
         pd_bandwidth_hz: float = 5.0,
         q_max=0.01,
@@ -36,8 +38,8 @@ class ArmController:
         u_max=(20.0, 20.0, 10.0, 4.0, 4.0, 4.0),
         use_disturbance_ff: bool = True,
     ):
-        """mode "pd": critically damped PD at pd_bandwidth_hz per joint.
-        mode "lqr": Bryson-weighted LQR with q_max, qd_max, u_max (scalars or one per joint)."""
+        """mode "lqr" (default): Bryson-weighted LQR with q_max, qd_max, u_max (scalars or one per joint).
+        mode "pd": critically damped PD at pd_bandwidth_hz per joint, the baseline for comparison."""
         y0 = np.asarray(y0, dtype=float)
         if y0.shape != (N_JOINTS,):
             raise ValueError(f"y0 must have shape ({N_JOINTS},), got {y0.shape}")
@@ -55,11 +57,7 @@ class ArmController:
         self._first = True
 
         if mode == "pd":
-            inertia = np.array([model.inertia for model in self.models])
-            omega = 2.0 * np.pi * float(pd_bandwidth_hz)
-            self.Kp = inertia * omega**2
-            self.Kd = 2.0 * inertia * omega
-            self.gains = None
+            self.gains = ArmPD(self.models, pd_bandwidth_hz)
         else:
             self.gains = ArmLQR(
                 self.models,
@@ -67,8 +65,6 @@ class ArmController:
                 qd_max=qd_max,
                 u_max=u_max,
             )
-            self.Kp = None
-            self.Kd = None
 
     @property
     def xhat(self) -> np.ndarray:
@@ -106,10 +102,7 @@ class ArmController:
         e_q = qhat - q_ref
         e_qd = qdhat - qd_ref
 
-        if self.mode == "pd":
-            u_feedback = -self.Kp * e_q - self.Kd * e_qd
-        else:
-            u_feedback = self.gains.feedback(e_q, e_qd)
+        u_feedback = self.gains.feedback(e_q, e_qd)
 
         u_disturbance_ff = -dhat if self.use_disturbance_ff else 0.0
         torque_command = gravity + u_feedback + u_disturbance_ff
