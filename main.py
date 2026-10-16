@@ -6,6 +6,8 @@
     python main.py --record videos/pick_place.mp4 --no-window
     python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
     python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
+    python main.py --approach open                  # look-then-move instead of PBVS
+    python main.py --push-cube 0.02                 # push the cube 2 cm when the approach starts
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -48,13 +50,18 @@ class TrialMonitor:
         # error rather than how far the cube has since been carried.
         self._estimate_seen = None
         self.cube_truth_at_estimate = None
+        # Horizontal cube-to-TCP offset when the cube first leaves the table: how well the grasp was centred.
+        self.grasp_offset = None
 
     def step(self, pp: PickPlace) -> None:
         if pp.cube_estimate is not None and pp.cube_estimate is not self._estimate_seen:
             self._estimate_seen = pp.cube_estimate
             gt = self.sim.ground_truth()
             self.cube_truth_at_estimate = (gt["cube_pos"].copy(), 2 * np.arctan2(gt["cube_quat"][3], gt["cube_quat"][0]))
-        cube_z = self.sim.ground_truth()["cube_pos"][2]
+        gt = self.sim.ground_truth()
+        cube_z = gt["cube_pos"][2]
+        if self.grasp_offset is None and cube_z - (TABLE_Z + CUBE_HALF) > 0.01:
+            self.grasp_offset = float(np.linalg.norm(gt["cube_pos"][:2] - gt["tcp_pos"][:2]))
         if cube_z - (TABLE_Z + CUBE_HALF) > LIFT_HEIGHT:
             self.lift_time += self.sim.dt
             self.max_lift_time = max(self.max_lift_time, self.lift_time)
@@ -71,7 +78,31 @@ class TrialMonitor:
             "placed": grasped and resting and place_err < PLACE_TOL,
             "place_err": place_err,
             "max_lift_time": self.max_lift_time,
+            "grasp_offset": self.grasp_offset,
         }
+
+
+class CubePush:
+    """DISTURBANCE FOR EXPERIMENTS ONLY: moves the cube by `distance` metres along the world +y axis once,
+    as soon as the pipeline leaves PREGRASP (start of APPROACH, or of DESCEND without PBVS), like a person
+    nudging it. Writes the simulator state directly; the pipeline only notices through the camera."""
+
+    def __init__(self, sim: TaskSim, distance: float):
+        self.sim = sim
+        self.distance = float(distance)
+        self.done = self.distance == 0.0
+        self._seen_pregrasp = False
+
+    def step(self, pp: PickPlace) -> None:
+        if self.done:
+            return
+        if pp.state == "PREGRASP":
+            self._seen_pregrasp = True
+        elif self._seen_pregrasp:
+            adr = self.sim.model.joint("cube_joint").qposadr[0]
+            self.sim.data.qpos[adr + 1] += self.distance
+            mujoco.mj_forward(self.sim.model, self.sim.data)
+            self.done = True
 
 
 # ---- display -------------------------------------------------------------------------------------
@@ -108,6 +139,7 @@ def info_panel(pp: PickPlace, monitor: TrialMonitor, seed: int, level: str, mode
     put(img, f"state: {pp.state}", 14, 54, (150, 220, 150), 0.7)
     noise = "noisy" if pp.sim.camera_noise is not None else "exact"
     put(img, f"camera: {pp.camera.source}, {noise}", 410, 54, (200, 200, 200), 0.45)
+    put(img, f"approach: {pp.approach}", 410, 74, (200, 200, 200), 0.45)
 
     gt = pp.sim.ground_truth()
     put(img, "object            estimate            true*            error", 14, 92, (180, 180, 255))
@@ -183,16 +215,18 @@ class Display:
 
 # ---- trials ----------------------------------------------------------------------------------------
 
-def run_trial(sim, robot, camera, seed, level, mode, timeout, display=None) -> dict:
+def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="pbvs", push=0.0, display=None) -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
     monitor = TrialMonitor(sim)
+    disturbance = CubePush(sim, push)
     steps_per_frame = max(1, round(1.0 / (FPS * sim.dt)))
     wall_start = time.perf_counter()
     count = 0
 
     def on_step(pp: PickPlace) -> None:
         nonlocal count
+        disturbance.step(pp)
         monitor.step(pp)
         count += 1
         if display is not None and count % steps_per_frame == 0:
@@ -200,7 +234,7 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, display=None) -> d
             if display.quit:
                 pp.timeout = 0.0  # ends the run at the next timeout check
 
-    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera)
+    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach)
     outcome = pick_place.run(timeout=timeout)
     result = monitor.result()
     failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
@@ -221,6 +255,10 @@ def main():
                    help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
     p.add_argument("--nominal-camera", action="store_true",
                    help="nominal K and camera mount instead of configs/camera_calib.json")
+    p.add_argument("--approach", default="pbvs", choices=["pbvs", "open"],
+                   help="pbvs: visual servoing from the pregrasp pose; open: look-then-move")
+    p.add_argument("--push-cube", type=float, default=0.0, metavar="M",
+                   help="experiment: push the cube this many metres along +y when the approach starts")
     args = p.parse_args()
 
     sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig())
@@ -232,12 +270,14 @@ def main():
     results = []
     try:
         for seed in range(args.seed, args.seed + args.trials):
-            r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout, display)
+            r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
+                          args.approach, args.push_cube, display)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"
-            print(f"seed {seed:4d}  {verdict:7s}  grasped={r['grasped']!s:5s}  place error {r['place_err']*1e3:6.1f} mm"
-                  f"  sim time {r['sim_time']:5.1f} s{detail}", flush=True)
+            offset = "  -  " if r["grasp_offset"] is None else f"{r['grasp_offset']*1e3:5.1f}"
+            print(f"seed {seed:4d}  {verdict:7s}  grasped={r['grasped']!s:5s}  grasp offset {offset} mm"
+                  f"  place error {r['place_err']*1e3:6.1f} mm  sim time {r['sim_time']:5.1f} s{detail}", flush=True)
             if display is not None and display.quit:
                 break
     finally:
@@ -247,11 +287,18 @@ def main():
 
     if len(results) > 1:
         placed = [r for r in results if r["placed"]]
-        print(f"\n{args.level}, {args.mode.upper()}: {len(placed)}/{len(results)} placed, "
+        push = f", push {args.push_cube*1e3:.0f} mm" if args.push_cube else ""
+        print(f"\n{args.level}, {args.mode.upper()}, {args.approach}{push}: {len(placed)}/{len(results)} placed, "
               f"{sum(r['grasped'] for r in results)}/{len(results)} grasped")
         if placed:
             err = np.array([r["place_err"] for r in placed]) * 1e3
             print(f"place error (successful trials): median {np.median(err):.1f} mm, max {err.max():.1f} mm")
+        offsets = np.array([r["grasp_offset"] for r in results if r["grasp_offset"] is not None]) * 1e3
+        if offsets.size:
+            print(f"grasp offset (cube to TCP when lifted): median {np.median(offsets):.1f} mm, max {offsets.max():.1f} mm")
+        times = np.array([r["sim_time"] for r in placed])
+        if times.size:
+            print(f"sim time (successful trials): median {np.median(times):.1f} s")
         failures = {}
         for r in results:
             if not r["placed"]:

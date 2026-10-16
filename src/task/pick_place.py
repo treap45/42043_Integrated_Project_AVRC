@@ -1,5 +1,6 @@
 import numpy as np
 
+from src.control.pbvs import joint_velocity, pbvs_twist, pose_error
 from src.perception.cube_pose import estimate_cube
 from src.perception.place_zone import estimate_zone
 from src.perception.camera_model import CameraModel
@@ -22,13 +23,19 @@ OBSERVE_TARGET_X = 0.33  # m, table point the camera looks at from the observe p
 class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
-    def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None):
+    def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None,
+                 approach: str = "pbvs"):
         """on_step(pick_place) is called after every control period, for display and logging only.
-        camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values."""
+        camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values.
+        approach: "pbvs" servos the TCP on the cube from the pregrasp pose before the final descent;
+        "open" descends straight from the pregrasp pose planned at OBSERVE (look-then-move)."""
+        if approach not in ("pbvs", "open"):
+            raise ValueError("approach must be 'pbvs' or 'open'")
         self.sim = sim
         self.robot = robot
         self.ctrl = ctrl
         self.camera = camera if camera is not None else CameraModel.nominal(robot)
+        self.approach = approach
         self.dt = sim.dt
         self.q_observe = ctrl.xhat[:, 0].copy()
         self.elapsed = 0.0
@@ -164,6 +171,26 @@ class PickPlace:
             self.zone_estimate = zone_estimate
         return cube_estimate, zone_estimate
 
+    def _capture_cube(self):
+        """Capture one frame and return a valid cube estimate, or None."""
+        rgb, depth = self.sim.read_camera()
+        qhat = self.ctrl.xhat[:, 0].copy()
+
+        mask = largest_component(
+            color_mask(rgb, **CUBE_HSV),
+            min_pixels=100,
+        )
+        if mask is None:
+            return None
+
+        points_cv = backproject(mask, depth, self.camera.K)
+        if len(points_cv) == 0:
+            return None
+
+        cam_pos, cam_rot = self.camera.pose(self.robot, qhat)
+        estimate = estimate_cube(camera_to_world(points_cv, cam_pos, cam_rot))
+        return estimate if estimate.ok else None
+
     def _move_joint(self, name: str, q_target: np.ndarray) -> bool:
         q_start = self.ctrl.xhat[:, 0].copy()
         traj = QuinticJoint(q_start, q_target)
@@ -196,6 +223,100 @@ class PickPlace:
             })
             return False
         return self._execute_trajectory(name, traj)
+
+
+    def _approach_pbvs(
+        self,
+        cube,
+        psi: float,
+        h_start: float = 0.095,
+        h_end: float = 0.060,
+        timeout: float = 5.0,
+    ):
+        """Servo the TCP above the cube while reducing the target height.
+
+        Returns the latest valid cube estimate, or None on timeout.
+        """
+        self.state = "APPROACH"
+        start_time = self.elapsed
+
+        q_ref = self.ctrl.xhat[:, 0].copy()
+        last_good = cube
+        _, R_des = grasp_poses(cube.pos, psi)["grasp"]
+
+        h = h_start
+        t = 0.0
+        k = 0
+        stable_count = 0
+
+        while t < timeout and self.elapsed < self.timeout:
+            if k % 50 == 0:
+                new_estimate = self._capture_cube()
+                if new_estimate is not None:
+                    last_good = new_estimate
+                    self.cube_estimate = new_estimate
+
+            h = max(h_end, h - 0.02 * self.dt)
+            target_z_velocity = -0.02 if h > h_end else 0.0
+
+            p_des = last_good.pos + np.array([0.0, 0.0, h])
+
+            qhat = self.ctrl.xhat[:, 0].copy()
+            p, R = self.robot.site_pose(qhat, "tcp")
+            error = pose_error(p, R, p_des, R_des)
+
+            feedforward = np.array([
+                0.0,
+                0.0,
+                target_z_velocity,
+                0.0,
+                0.0,
+                0.0,
+            ])
+            twist = pbvs_twist(error, feedforward=feedforward)
+            qd_command = joint_velocity(self.robot.site_jacobian(qhat, "tcp"), twist)
+
+            q_ref_candidate = q_ref + qd_command * self.dt
+            reference_is_close = np.max(np.abs(q_ref - qhat)) < 0.05
+            candidate_is_close = np.max(np.abs(q_ref_candidate - qhat)) < 0.05
+
+            if reference_is_close and candidate_is_close:
+                q_ref = q_ref_candidate
+                qd_ref = qd_command
+            else:
+                # Freeze the reference and let the joint controller catch up.
+                qd_ref = np.zeros(6)
+
+            self._control_step(q_ref, qd_ref)
+
+            height_reached = h <= h_end + 1e-12
+            position_ok = np.linalg.norm(error[:3]) < 0.003
+            orientation_ok = np.linalg.norm(error[3:]) < 0.03
+
+            if height_reached and position_ok and orientation_ok:
+                stable_count += 1
+            else:
+                stable_count = 0
+
+            if stable_count >= 5:
+                self.records.append({
+                    "state": "APPROACH",
+                    "ok": True,
+                    "elapsed": self.elapsed - start_time,
+                    "reason": None,
+                })
+                return last_good
+
+            t += self.dt
+            k += 1
+
+        self.records.append({
+            "state": "APPROACH",
+            "ok": False,
+            "elapsed": self.elapsed - start_time,
+            "reason": "overall timeout" if self.elapsed >= self.timeout else "state timeout",
+        })
+        return None
 
     def _select_grasp(self, cube_pos, cube_yaw, q_seed):
         """Select the feasible yaw candidate requiring the least joint motion."""
@@ -294,6 +415,16 @@ class PickPlace:
 
         if not self._move_joint("PREGRASP", q_pregrasp):
             return self._fail("PREGRASP failed")
+
+        if self.approach == "pbvs":
+            cube = self._approach_pbvs(cube, psi)
+            if cube is None:
+                return self._fail("APPROACH failed")
+            # Final descent from where PBVS stopped, to the grasp pose of the latest estimate.
+            poses = grasp_poses(cube.pos, psi)
+            p_grasp = poses["grasp"][0]
+            p_lift = poses["lift"][0]
+            p_pre, _ = self.robot.site_pose(self.ctrl.xhat[:, 0], "tcp")
 
         if not self._move_cartesian("DESCEND", p_pre, p_grasp, rotation, 1.5):
             return self._fail("DESCEND failed")
