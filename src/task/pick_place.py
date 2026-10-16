@@ -24,7 +24,7 @@ class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
     def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None,
-                 approach: str = "pbvs"):
+                 approach: str = "open"):
         """on_step(pick_place) is called after every control period, for display and logging only.
         camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values.
         approach: "pbvs" servos the TCP on the cube from the pregrasp pose before the final descent;

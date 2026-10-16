@@ -6,8 +6,8 @@
     python main.py --record videos/pick_place.mp4 --no-window
     python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
     python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
-    python main.py --approach open                  # look-then-move instead of PBVS
-    python main.py --push-cube 0.02                 # push the cube 2 cm when the approach starts
+    python main.py --approach pbvs                  # PBVS for the approach instead of look-then-move
+    python main.py --approach pbvs --push-cube 0.025   # push the cube 25 mm when the approach starts
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -215,7 +215,7 @@ class Display:
 
 # ---- trials ----------------------------------------------------------------------------------------
 
-def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="pbvs", push=0.0, display=None) -> dict:
+def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="open", push=0.0, display=None) -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
     monitor = TrialMonitor(sim)
@@ -255,8 +255,8 @@ def main():
                    help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
     p.add_argument("--nominal-camera", action="store_true",
                    help="nominal K and camera mount instead of configs/camera_calib.json")
-    p.add_argument("--approach", default="pbvs", choices=["pbvs", "open"],
-                   help="pbvs: visual servoing from the pregrasp pose; open: look-then-move")
+    p.add_argument("--approach", default="open", choices=["open", "pbvs"],
+                   help="open (default): look-then-move; pbvs: visual servoing from the pregrasp pose")
     p.add_argument("--push-cube", type=float, default=0.0, metavar="M",
                    help="experiment: push the cube this many metres along +y when the approach starts")
     args = p.parse_args()
