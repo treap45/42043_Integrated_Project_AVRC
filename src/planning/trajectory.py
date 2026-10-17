@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.interpolate import CubicSpline
+from scipy.spatial.transform import Rotation
 
 from src.planning.ik import orientation_error, solve_ik
 
@@ -100,3 +101,47 @@ class CartesianLine:
             return self._spline(self.T), np.zeros(6)
 
         return self._spline(t), self._spline(t, 1)
+
+
+class GoalRelativeQuintic:
+    """Quintic reference that moves with the goal: p_ref = g + (1 - s) delta0, R_ref = R0 Exp(s phi0)."""
+
+    def __init__(self, p0, R0, g0, R_goal,
+                 v_peak=0.10, w_peak=0.5, t_min=1.0):
+        self.delta0 = np.asarray(p0, dtype=float) - np.asarray(g0, dtype=float)
+        self.R0 = np.asarray(R0, dtype=float)
+        self.R_goal = np.asarray(R_goal, dtype=float)
+
+        # The rotation vector is expressed in the initial TCP frame.
+        self.phi0 = Rotation.from_matrix(
+            self.R0.T @ self.R_goal
+        ).as_rotvec()
+
+        self.T = max(
+            t_min,
+            1.875 * np.linalg.norm(self.delta0) / v_peak,
+            1.875 * np.linalg.norm(self.phi0) / w_peak,
+        )
+
+    def __call__(self, t, g_hat):
+        """Return p_ref, R_ref, the feed-forward twist [v; w] and s at time t for the goal estimate g_hat."""
+        if t >= self.T:
+            s = 1.0
+            ds = 0.0
+        else:
+            tau = np.clip(t / self.T, 0.0, 1.0)
+            s = 10 * tau**3 - 15 * tau**4 + 6 * tau**5
+            ds = (
+                30 * tau**2 - 60 * tau**3 + 30 * tau**4
+            ) / self.T
+
+        p_ref = np.asarray(g_hat, dtype=float) + (1.0 - s) * self.delta0
+        R_ref = self.R0 @ Rotation.from_rotvec(s * self.phi0).as_matrix()
+
+        # Both components are expressed in the world frame.
+        feedforward = np.concatenate((
+            -ds * self.delta0,
+            ds * (self.R0 @ self.phi0),
+        ))
+
+        return p_ref, R_ref, feedforward, s

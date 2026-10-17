@@ -13,6 +13,8 @@ V_MAX = 0.03  # m/s, TCP linear speed limit
 W_MAX = 0.5  # rad/s, TCP angular speed limit
 DAMPING = 0.02  # damped least-squares lambda, same as solve_ik
 QD_MAX = 1.0  # rad/s, joint velocity limit
+TRANSIT_V_MAX = 0.15  # m/s, TRANSIT limit: above the 0.10 m/s feed-forward peak, leaving room for feedback
+TRANSIT_W_MAX = 0.8  # rad/s, TRANSIT limit: above the 0.5 rad/s feed-forward peak
 
 
 def pose_error(

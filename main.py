@@ -1,13 +1,16 @@
 """Run the vision-guided pick-and-place: one command for the demo and for batches of trials.
 
-    python main.py                                  # live window, L0, seed 0, LQR
+    python main.py                                  # live window, L0, seed 0, LQR, PBVS from the observe pose
     python main.py --seed 7 --level L1 --mode pd
     python main.py --trials 20 --no-window          # seeds 0-19, prints a summary
     python main.py --record videos/pick_place.mp4 --no-window
     python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
     python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
-    python main.py --approach pbvs                  # PBVS for the approach instead of look-then-move
-    python main.py --approach pbvs --push-cube 0.025   # push the cube 25 mm when the approach starts
+    python main.py --approach open                  # look-then-move: no visual feedback after OBSERVE
+    python main.py --approach pbvs                  # PBVS only for the approach from the pregrasp pose
+    python main.py --push-cube 0.025 --approach open   # push the cube 25 mm when the approach starts
+    python main.py --push-cube 0.025 --push-at transit_mid   # push half-way to the pregrasp pose
+    python main.py --handeye-error-deg 2            # experiment: tilt the calibrated camera mount by 2 deg
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -15,12 +18,14 @@ the estimate on screen; it never reaches the estimator, planner or controller.
 """
 
 import argparse
+import dataclasses
 import time
 from pathlib import Path
 
 import cv2
 import mujoco
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from src.control.arm_controller import ArmController
 from src.model.ur3e import UR3eModel
@@ -84,21 +89,28 @@ class TrialMonitor:
 
 class CubePush:
     """DISTURBANCE FOR EXPERIMENTS ONLY: moves the cube by `distance` metres along the world +y axis once,
-    as soon as the pipeline leaves PREGRASP (start of APPROACH, or of DESCEND without PBVS), like a person
-    nudging it. Writes the simulator state directly; the pipeline only notices through the camera."""
+    like a person nudging it. Writes the simulator state directly; the pipeline only notices through the camera.
 
-    def __init__(self, sim: TaskSim, distance: float):
+    at="approach_start": when the move to the pregrasp pose ends (start of APPROACH, or of DESCEND for "open").
+    at="transit_mid": half-way through the move to the pregrasp pose (PREGRASP or TRANSIT progress >= 0.5);
+    the same instant for every approach, since quintic timing puts s = 0.5 at t = T/2."""
+
+    def __init__(self, sim: TaskSim, distance: float, at: str = "approach_start"):
+        if at not in ("approach_start", "transit_mid"):
+            raise ValueError("at must be 'approach_start' or 'transit_mid'")
         self.sim = sim
         self.distance = float(distance)
+        self.at = at
         self.done = self.distance == 0.0
-        self._seen_pregrasp = False
 
     def step(self, pp: PickPlace) -> None:
         if self.done:
             return
-        if pp.state == "PREGRASP":
-            self._seen_pregrasp = True
-        elif self._seen_pregrasp:
+        if self.at == "approach_start":
+            trigger = pp.state in ("APPROACH", "DESCEND")
+        else:
+            trigger = pp.state in ("PREGRASP", "TRANSIT") and pp.progress >= 0.5
+        if trigger:
             adr = self.sim.model.joint("cube_joint").qposadr[0]
             self.sim.data.qpos[adr + 1] += self.distance
             mujoco.mj_forward(self.sim.model, self.sim.data)
@@ -215,11 +227,12 @@ class Display:
 
 # ---- trials ----------------------------------------------------------------------------------------
 
-def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="open", push=0.0, display=None) -> dict:
+def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="pbvs_full", push=0.0,
+              push_at="approach_start", display=None) -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
     monitor = TrialMonitor(sim)
-    disturbance = CubePush(sim, push)
+    disturbance = CubePush(sim, push, push_at)
     steps_per_frame = max(1, round(1.0 / (FPS * sim.dt)))
     wall_start = time.perf_counter()
     count = 0
@@ -238,8 +251,15 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="open", p
     outcome = pick_place.run(timeout=timeout)
     result = monitor.result()
     failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
+    log = pick_place.transit_log
+    attempts = [e["status"] for e in log if e["vision_attempt"]]
+    transit = None if not log else {
+        "frozen": sum(e["frozen"] for e in log) / len(log),
+        "no_detection": attempts.count("none") / max(len(attempts), 1),
+        "rejected": attempts.count("rejected"),
+    }
     return {"seed": seed, "pipeline_ok": outcome["ok"], "reason": outcome["reason"],
-            "failed_state": failed_state, "sim_time": outcome["elapsed"], **result}
+            "failed_state": failed_state, "sim_time": outcome["elapsed"], "transit": transit, **result}
 
 
 def main():
@@ -255,15 +275,25 @@ def main():
                    help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
     p.add_argument("--nominal-camera", action="store_true",
                    help="nominal K and camera mount instead of configs/camera_calib.json")
-    p.add_argument("--approach", default="open", choices=["open", "pbvs"],
-                   help="open (default): look-then-move; pbvs: visual servoing from the pregrasp pose")
+    p.add_argument("--approach", default="pbvs_full", choices=["pbvs_full", "pbvs", "open"],
+                   help="pbvs_full (default): visual servoing from the observe pose; pbvs: only from the "
+                        "pregrasp pose; open: look-then-move, for comparison")
     p.add_argument("--push-cube", type=float, default=0.0, metavar="M",
-                   help="experiment: push the cube this many metres along +y when the approach starts")
+                   help="experiment: push the cube this many metres along +y (see --push-at)")
+    p.add_argument("--push-at", default="approach_start", choices=["approach_start", "transit_mid"],
+                   help="when to push: start of the approach (default) or half-way to the pregrasp pose")
+    p.add_argument("--handeye-error-deg", type=float, default=0.0, metavar="DEG",
+                   help="experiment: rotate the camera mount used by the pipeline by DEG about the camera x axis")
     args = p.parse_args()
 
     sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig())
     robot = UR3eModel()
     camera = CameraModel.nominal(robot) if args.nominal_camera else CameraModel.from_calibration()
+    if args.handeye_error_deg:
+        # Tilt about the camera x axis: an error about the optical axis would barely move a centred cube.
+        R_err = Rotation.from_rotvec(np.deg2rad(args.handeye_error_deg) * np.array([1.0, 0.0, 0.0])).as_matrix()
+        camera = dataclasses.replace(camera, R_ee_cam=camera.R_ee_cam @ R_err,
+                                     source=f"{camera.source} + {args.handeye_error_deg:g} deg error")
     show = not args.no_window
     display = Display(sim, show, args.record) if (show or args.record) else None
 
@@ -271,7 +301,7 @@ def main():
     try:
         for seed in range(args.seed, args.seed + args.trials):
             r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
-                          args.approach, args.push_cube, display)
+                          args.approach, args.push_cube, args.push_at, display)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"
@@ -287,7 +317,9 @@ def main():
 
     if len(results) > 1:
         placed = [r for r in results if r["placed"]]
-        push = f", push {args.push_cube*1e3:.0f} mm" if args.push_cube else ""
+        push = f", push {args.push_cube*1e3:.0f} mm at {args.push_at}" if args.push_cube else ""
+        if args.handeye_error_deg:
+            push += f", hand-eye error {args.handeye_error_deg:g} deg"
         print(f"\n{args.level}, {args.mode.upper()}, {args.approach}{push}: {len(placed)}/{len(results)} placed, "
               f"{sum(r['grasped'] for r in results)}/{len(results)} grasped")
         if placed:
@@ -299,6 +331,11 @@ def main():
         times = np.array([r["sim_time"] for r in placed])
         if times.size:
             print(f"sim time (successful trials): median {np.median(times):.1f} s")
+        transits = [r["transit"] for r in results if r["transit"] is not None]
+        if transits:
+            print(f"TRANSIT: frozen steps median {100*np.median([x['frozen'] for x in transits]):.1f} %, "
+                  f"no detection median {100*np.median([x['no_detection'] for x in transits]):.0f} % of vision "
+                  f"updates, rejected measurements {sum(x['rejected'] for x in transits)}")
         failures = {}
         for r in results:
             if not r["placed"]:

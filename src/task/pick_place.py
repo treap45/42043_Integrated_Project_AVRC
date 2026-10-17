@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.control.pbvs import joint_velocity, pbvs_twist, pose_error
+from src.control.pbvs import TRANSIT_V_MAX, TRANSIT_W_MAX, joint_velocity, pbvs_twist, pose_error
 from src.perception.cube_pose import estimate_cube
 from src.perception.place_zone import estimate_zone
 from src.perception.camera_model import CameraModel
@@ -13,24 +13,29 @@ from src.perception.segmentation import (
 )
 from src.planning.grasp import grasp_poses, place_poses, yaw_candidates
 from src.planning.ik import solve_ik
-from src.planning.trajectory import CartesianLine, QuinticJoint
+from src.planning.trajectory import CartesianLine, GoalRelativeQuintic, QuinticJoint
 
 SETTLE_WINDOW = 50  # control periods (0.1 s at 500 Hz)
 ZONE_VIEW_MIN_RADIUS = 0.30  # m, keeps the zone-view pose reachable for zones near the base
 OBSERVE_TARGET_X = 0.33  # m, table point the camera looks at from the observe pose
+GOAL_ALPHA = 0.4  # TRANSIT goal filter gain per vision update
+GOAL_GATE = 0.04  # m, a larger jump in the measured goal is treated as an outlier
+GOAL_AGREE = 0.01  # m, two consecutive outliers this close are accepted as a real move of the cube
+GOAL_UPDATE_PERIOD = 50  # control periods between vision updates (10 Hz at 500 Hz)
 
 
 class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
     def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None,
-                 approach: str = "open"):
+                 approach: str = "pbvs_full"):
         """on_step(pick_place) is called after every control period, for display and logging only.
         camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values.
-        approach: "pbvs" servos the TCP on the cube from the pregrasp pose before the final descent;
-        "open" descends straight from the pregrasp pose planned at OBSERVE (look-then-move)."""
-        if approach not in ("pbvs", "open"):
-            raise ValueError("approach must be 'pbvs' or 'open'")
+        approach: "pbvs_full" also servos the move from OBSERVE to the pregrasp pose (TRANSIT) on the cube;
+        "pbvs" moves to the pregrasp pose planned at OBSERVE, then servos the TCP on the cube before the
+        final descent; "open" descends straight from that pregrasp pose (look-then-move)."""
+        if approach not in ("pbvs_full", "pbvs", "open"):
+            raise ValueError("approach must be 'pbvs_full', 'pbvs' or 'open'")
         self.sim = sim
         self.robot = robot
         self.ctrl = ctrl
@@ -43,6 +48,8 @@ class PickPlace:
         self.timeout = 60.0
         self.on_step = on_step
         self.state = "START"
+        self.progress = 0.0  # fraction of the current trajectory, for disturbance timing in experiments
+        self.transit_log = []
         self.cube_estimate = None
         self.zone_estimate = None
 
@@ -109,6 +116,9 @@ class PickPlace:
 
         while traj_time <= state_timeout and self.elapsed < self.timeout:
             q_ref, qd_ref = traj(traj_time)
+            # Time fraction; equals the quintic path fraction s at the midpoint, so "progress >= 0.5" is the
+            # same instant here and in TRANSIT.
+            self.progress = min(traj_time / traj.T, 1.0)
             self._control_step(q_ref, qd_ref)
             traj_time += self.dt
 
@@ -224,6 +234,141 @@ class PickPlace:
             return False
         return self._execute_trajectory(name, traj)
 
+    def _update_goal(self, g_hat, psi, pending):
+        """One vision update of the filtered pregrasp goal g_hat.
+
+        Returns (g_hat, cube or None, pending, status). A measurement more than GOAL_GATE from g_hat is held
+        in `pending` and accepted only if the next measurement agrees with it within GOAL_AGREE.
+        """
+        cube = self._capture_cube()
+
+        if cube is None:
+            return g_hat, None, None, "none"
+
+        g_meas = grasp_poses(cube.pos, psi)["pregrasp"][0]
+
+        if np.linalg.norm(g_meas - g_hat) <= GOAL_GATE:
+            g_new = g_hat + GOAL_ALPHA * (g_meas - g_hat)
+            return g_new, cube, None, "accepted"
+
+        if pending is not None and np.linalg.norm(g_meas - pending) < GOAL_AGREE:
+            return g_meas, cube, None, "reacquired"
+
+        return g_hat, None, g_meas, "rejected"
+
+    def _servo_step(self, q_ref, q_hat, twist):
+        """Integrate the DLS joint velocity of a twist into q_ref; freeze q_ref while the joints lag by 0.05 rad.
+
+        Returns (q_ref, qd_ref, frozen).
+        """
+        J = self.robot.site_jacobian(q_hat, "tcp")
+        qd_cmd = joint_velocity(J, twist)
+
+        candidate = q_ref + qd_cmd * self.dt
+
+        ref_close = np.max(np.abs(q_ref - q_hat)) < 0.05
+        candidate_close = np.max(np.abs(candidate - q_hat)) < 0.05
+
+        if ref_close and candidate_close:
+            return candidate, qd_cmd, False
+
+        return q_ref.copy(), np.zeros_like(q_ref), True
+
+    def _transit_pbvs(self, cube, psi, enable_goal_updates=True):
+        """Servo the TCP from its current pose to the pregrasp pose along a reference that follows the goal.
+
+        Returns the latest valid cube estimate, or None on timeout.
+        """
+        self.state = "TRANSIT"
+        self.progress = 0.0
+        start_time = self.elapsed
+
+        q_ref = self.ctrl.xhat[:, 0].copy()
+        p0, R0 = self.robot.site_pose(q_ref, "tcp")
+        g_hat, R_goal = grasp_poses(cube.pos, psi)["pregrasp"]
+
+        traj = GoalRelativeQuintic(p0, R0, g_hat, R_goal)
+        last_good = cube
+        pending = None
+
+        self.transit_log = []
+        t = 0.0
+        k = 0
+        settled_steps = 0
+        last_status = "not_sampled"
+
+        while t < traj.T + 3.0 and self.elapsed < self.timeout:
+            vision_attempt = enable_goal_updates and k % GOAL_UPDATE_PERIOD == 0
+
+            if vision_attempt:
+                g_hat, detected_cube, pending, last_status = self._update_goal(
+                    g_hat, psi, pending
+                )
+                if detected_cube is not None:
+                    last_good = detected_cube
+                    self.cube_estimate = detected_cube
+
+            q_hat = self.ctrl.xhat[:, 0].copy()
+            p, R = self.robot.site_pose(q_hat, "tcp")
+            p_ref, R_ref, feedforward, s = traj(t, g_hat)
+            self.progress = s
+
+            error = pose_error(p, R, p_ref, R_ref)
+            twist = pbvs_twist(
+                error,
+                feedforward=feedforward,
+                v_max=TRANSIT_V_MAX,
+                w_max=TRANSIT_W_MAX,
+            )
+
+            q_ref, qd_ref, frozen = self._servo_step(q_ref, q_hat, twist)
+
+            e_p = np.linalg.norm(error[:3])
+            e_R = np.linalg.norm(error[3:])
+
+            self.transit_log.append({
+                "t": t,
+                "s": s,
+                "p": p.copy(),
+                "p_ref": p_ref.copy(),
+                "g_hat": g_hat.copy(),
+                "status": last_status if vision_attempt else "not_sampled",
+                "vision_attempt": vision_attempt,
+                "e_p": e_p,
+                "e_R": e_R,
+                "frozen": frozen,
+            })
+
+            in_tolerance = (
+                t >= traj.T
+                and e_p < 0.005
+                and e_R < 0.05
+            )
+            settled_steps = settled_steps + 1 if in_tolerance else 0
+
+            self._control_step(q_ref, qd_ref)
+
+            if settled_steps >= 5:
+                self.progress = 1.0
+                self.records.append({
+                    "state": "TRANSIT",
+                    "ok": True,
+                    "elapsed": self.elapsed - start_time,
+                    "reason": None,
+                })
+                return last_good
+
+            t += self.dt
+            k += 1
+
+        self.records.append({
+            "state": "TRANSIT",
+            "ok": False,
+            "elapsed": self.elapsed - start_time,
+            "reason": "overall timeout" if self.elapsed >= self.timeout else "state timeout",
+        })
+        return None
+
 
     def _approach_pbvs(
         self,
@@ -274,19 +419,7 @@ class PickPlace:
                 0.0,
             ])
             twist = pbvs_twist(error, feedforward=feedforward)
-            qd_command = joint_velocity(self.robot.site_jacobian(qhat, "tcp"), twist)
-
-            q_ref_candidate = q_ref + qd_command * self.dt
-            reference_is_close = np.max(np.abs(q_ref - qhat)) < 0.05
-            candidate_is_close = np.max(np.abs(q_ref_candidate - qhat)) < 0.05
-
-            if reference_is_close and candidate_is_close:
-                q_ref = q_ref_candidate
-                qd_ref = qd_command
-            else:
-                # Freeze the reference and let the joint controller catch up.
-                qd_ref = np.zeros(6)
-
+            q_ref, qd_ref, _ = self._servo_step(q_ref, qhat, twist)
             self._control_step(q_ref, qd_ref)
 
             height_reached = h <= h_end + 1e-12
@@ -413,10 +546,14 @@ class PickPlace:
         if not ok:
             return self._fail("grasp pose IK did not converge")
 
-        if not self._move_joint("PREGRASP", q_pregrasp):
+        if self.approach == "pbvs_full":
+            cube = self._transit_pbvs(cube, psi)
+            if cube is None:
+                return self._fail("TRANSIT failed")
+        elif not self._move_joint("PREGRASP", q_pregrasp):
             return self._fail("PREGRASP failed")
 
-        if self.approach == "pbvs":
+        if self.approach in ("pbvs", "pbvs_full"):
             cube = self._approach_pbvs(cube, psi)
             if cube is None:
                 return self._fail("APPROACH failed")
