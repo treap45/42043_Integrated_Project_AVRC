@@ -120,6 +120,77 @@ def sample_trial(seed: int, level: str = "L0", ws: WorkspaceConfig = WorkspaceCo
     return TrialConfig(seed, level, cube_xy, cube_yaw, zone_xy, occluders)
 
 
+@dataclass(frozen=True)
+class CubeMotionConfig:
+    """Moving-cube task: the cube slides along the table in a straight line at constant speed, then stops.
+
+    The motion is drawn from its own random stream, so enabling it leaves the static part of a trial (cube start,
+    yaw, zone, occluders) exactly as without it.
+    """
+
+    start_time: float = 0.5  # s; the OBSERVE capture happens at 0.2 s, so the first frame sees the cube at rest
+    speed: tuple = (0.01, 0.03)  # m/s
+    distance: tuple = (0.05, 0.12)  # m
+    max_radius: float = 0.43  # m, end point to the base axis; past about 0.45 m the shoulder_pan joint oscillates
+    zone_clearance: float = 0.12  # m, end point to zone centre, so the cube does not stop on the zone
+    max_tries: int = 1000
+
+
+@dataclass(frozen=True)
+class CubeMotion:
+    start_time: float  # s
+    start_xy: np.ndarray  # m
+    velocity: np.ndarray  # m/s, world frame
+    duration: float  # s
+
+    @property
+    def stop_time(self) -> float:
+        return self.start_time + self.duration
+
+    @property
+    def end_xy(self) -> np.ndarray:
+        return self.start_xy + self.velocity * self.duration
+
+    def at(self, t: float) -> tuple[np.ndarray, np.ndarray]:
+        """Prescribed cube xy position and velocity at time t (at rest before the start and after the stop)."""
+        if t < self.start_time:
+            return self.start_xy.copy(), np.zeros(2)
+        if t >= self.stop_time:
+            return self.end_xy, np.zeros(2)
+        return self.start_xy + self.velocity * (t - self.start_time), self.velocity.copy()
+
+
+def _segment_distance(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    """Distance from point p to the segment ab."""
+    ab = b - a
+    s = np.clip(np.dot(p - a, ab) / np.dot(ab, ab), 0.0, 1.0)
+    return float(np.linalg.norm(p - (a + s * ab)))
+
+
+def sample_cube_motion(seed: int, trial: TrialConfig, cfg: CubeMotionConfig = CubeMotionConfig(),
+                       ws: WorkspaceConfig = WorkspaceConfig()) -> CubeMotion:
+    """Random heading, speed and distance from the trial's cube position. The end point stays in the cube
+    sampling range and within reach, the cube does not stop on the zone, and the path keeps clear of occluders."""
+    rng = np.random.default_rng([seed, 4])
+    cube_r = np.sqrt(2) * CUBE_HALF
+    start = np.asarray(trial.cube_xy, dtype=float)
+    for _ in range(cfg.max_tries):
+        heading, speed, dist = rng.uniform(0, 2 * np.pi), rng.uniform(*cfg.speed), rng.uniform(*cfg.distance)
+        direction = np.array([np.cos(heading), np.sin(heading)])
+        end = start + dist * direction
+        if not (ws.cube_x[0] <= end[0] <= ws.cube_x[1] and ws.cube_y[0] <= end[1] <= ws.cube_y[1]):
+            continue
+        if np.hypot(*end) > cfg.max_radius:
+            continue
+        if np.linalg.norm(end - trial.zone_xy) < cfg.zone_clearance:
+            continue
+        if any(_segment_distance(np.array([o.x, o.y]), start, end) < o.radius + cube_r + ws.clearance
+               for o in trial.occluders):
+            continue
+        return CubeMotion(cfg.start_time, start.copy(), speed * direction, dist / speed)
+    raise RuntimeError(f"could not place a cube motion for seed {seed}")
+
+
 def apply_trial(model: mujoco.MjModel, data: mujoco.MjData, trial: TrialConfig) -> None:
     """Write a sampled trial into the model/data. Call mj_forward afterwards."""
     jnt = model.joint("cube_joint")

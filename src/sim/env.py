@@ -13,7 +13,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .randomize import TrialConfig, WorkspaceConfig, apply_trial, sample_trial
+from .randomize import (CubeMotion, CubeMotionConfig, TrialConfig, WorkspaceConfig, apply_trial,
+                        sample_cube_motion, sample_trial)
 from .sensors import CameraNoise, CameraNoiseConfig, EncoderConfig, JointEncoders, WristCamera
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -33,8 +34,9 @@ N_ARM = len(ARM_JOINTS)
 class TaskSim:
     def __init__(self, encoder_cfg: EncoderConfig = EncoderConfig(),
                  workspace: WorkspaceConfig = WorkspaceConfig(), scene_xml: Path = SCENE_XML,
-                 camera_noise: CameraNoiseConfig | None = None):
-        """camera_noise=None gives exact RGB-D frames; pass CameraNoiseConfig() for the noisy camera."""
+                 camera_noise: CameraNoiseConfig | None = None, cube_motion: CubeMotionConfig | None = None):
+        """camera_noise=None gives exact RGB-D frames; pass CameraNoiseConfig() for the noisy camera.
+        cube_motion=None keeps the cube at rest; pass CubeMotionConfig() for the moving-cube task."""
         self.model = mujoco.MjModel.from_xml_path(str(scene_xml))
         # Exact depth: with MSAA the resolved depth comes from an off-centre sub-sample.
         self.model.vis.quality.offsamples = 0
@@ -47,6 +49,11 @@ class TaskSim:
         self.camera_noise: CameraNoise | None = None
         self._grip_act = self.model.actuator("gripper_fingers_actuator").id
         self._key = self.model.key("observe").id
+        cube_joint = self.model.joint("cube_joint")
+        self._cube_qadr, self._cube_dof = int(cube_joint.qposadr[0]), int(cube_joint.dofadr[0])
+        self.cube_motion_cfg = cube_motion
+        self.cube_motion: CubeMotion | None = None
+        self._cube_released = True
         self.trial: TrialConfig | None = None
         self.reset(seed=0)
 
@@ -63,6 +70,9 @@ class TaskSim:
                                             np.random.default_rng([seed, 2]))
             self._display_noise = CameraNoise(self.camera_noise_cfg, self.camera._K_true,
                                               np.random.default_rng([seed, 3]))
+        if self.cube_motion_cfg is not None:
+            self.cube_motion = sample_cube_motion(seed, self.trial, self.cube_motion_cfg, self.workspace)
+            self._cube_released = False
         mujoco.mj_forward(self.model, self.data)
         return self.trial
 
@@ -80,6 +90,26 @@ class TaskSim:
         self.data.ctrl[:N_ARM] = tau
         for _ in range(n_steps):
             mujoco.mj_step(self.model, self.data)
+            self._drive_cube()
+
+    def _drive_cube(self) -> None:
+        """Moving-cube task: prescribe the cube's slide (like a conveyor or a hand pushing it) until it stops,
+        then hand it back to the physics. Plant side only; the pipeline sees the motion through the camera.
+
+        Written after each physics step, so the state that is read (camera, ground truth) is exactly the
+        prescribed one; table friction would otherwise stop the cube within the step."""
+        if self._cube_released or self.cube_motion is None:
+            return
+        t = float(self.data.time)
+        if t < self.cube_motion.start_time:
+            return
+        xy, v = self.cube_motion.at(t)
+        adr, dof = self._cube_qadr, self._cube_dof
+        self.data.qpos[adr:adr + 2] = xy
+        self.data.qvel[dof:dof + 2] = v
+        self.data.qvel[dof + 3:dof + 6] = 0.0  # no spin from table friction
+        if t >= self.cube_motion.stop_time:
+            self._cube_released = True
 
     def set_gripper(self, closure: float) -> None:
         """0 = fully open, 1 = fully closed."""
@@ -141,6 +171,7 @@ class TaskSim:
             "qd": d.qvel[:N_ARM].copy(),
             "cube_pos": d.body("cube").xpos.copy(),
             "cube_quat": d.body("cube").xquat.copy(),
+            "cube_vel": d.qvel[self._cube_dof:self._cube_dof + 3].copy(),  # free joint: linear part in world frame
             "zone_pos": d.body("place_zone").xpos.copy(),
             "tcp_pos": d.site("tcp").xpos.copy(),
             "cam_pos": d.cam_xpos[cam].copy(),

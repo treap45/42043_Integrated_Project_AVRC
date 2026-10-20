@@ -88,3 +88,44 @@ def estimate_cube(
         top_size=size,
         ok=bool(size_ok and len(top) >= min_top_points),
     )
+
+def cube_measurement(points_cv, points_w, cube, K_cam):
+    """Return [u, v, Z, yaw] from matched OpenCV/world point clouds."""
+    if cube is None or not cube.ok:
+        return None
+
+    points_cv = np.asarray(points_cv, dtype=float)
+    points_w = np.asarray(points_w, dtype=float)
+
+    if (
+        points_cv.ndim != 2
+        or points_cv.shape[1] != 3
+        or points_w.shape != points_cv.shape
+    ):
+        raise ValueError("points_cv and points_w must both have shape (N, 3)")
+
+    valid = (
+        np.all(np.isfinite(points_cv), axis=1)
+        & np.all(np.isfinite(points_w), axis=1)
+    )
+    points_cv = points_cv[valid]
+    points_w = points_w[valid]
+
+    if len(points_cv) == 0:
+        return None
+
+    z_ref = np.percentile(points_w[:, 2], 98.0)
+    top = points_w[:, 2] >= z_ref - 0.005
+    if np.count_nonzero(top) < 20:
+        return None
+
+    X, Y, Z = np.mean(points_cv[top], axis=0)
+    if Z <= 0.0:
+        return None
+
+    fx, fy = K_cam[0, 0], K_cam[1, 1]
+    cx, cy = K_cam[0, 2], K_cam[1, 2]
+
+    u = fx * X / Z + cx
+    v = fy * Y / Z + cy
+    return np.array([u, v, Z, cube.yaw], dtype=float)

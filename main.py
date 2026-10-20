@@ -1,16 +1,19 @@
 """Run the vision-guided pick-and-place: one command for the demo and for batches of trials.
 
-    python main.py                                  # live window, L0, seed 0, LQR, PBVS from the observe pose
-    python main.py --seed 7 --level L1 --mode pd
+    python main.py                                  # live window, L0, seed 0, LQR, look-then-move
+    python main.py --seed 7 --level L1 --mode pd --approach pbvs_full
     python main.py --trials 20 --no-window          # seeds 0-19, prints a summary
     python main.py --record videos/pick_place.mp4 --no-window
     python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
     python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
-    python main.py --approach open                  # look-then-move: no visual feedback after OBSERVE
-    python main.py --approach pbvs                  # PBVS only for the approach from the pregrasp pose
-    python main.py --push-cube 0.025 --approach open   # push the cube 25 mm when the approach starts
-    python main.py --push-cube 0.025 --push-at transit_mid   # push half-way to the pregrasp pose
+    python main.py --approach pbvs                  # PBVS from the pregrasp pose down to 60 mm above the cube
+    python main.py --approach pbvs_full             # PBVS also for the move from the observe pose (TRANSIT)
+    python main.py --push-cube 0.025 --approach pbvs   # push the cube 25 mm when the approach starts
+    python main.py --push-cube 0.025 --push-at transit_mid --approach pbvs_full   # push half-way to the pregrasp pose
     python main.py --handeye-error-deg 2            # experiment: tilt the calibrated camera mount by 2 deg
+    python main.py --viewer                         # also show the run in the interactive MuJoCo viewer
+    python main.py --moving-cube                    # the cube slides in a straight line, then stops
+    python main.py --moving-cube --approach track   # follow the moving cube (cube EKF + PBVS), pick once it stops
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -30,7 +33,7 @@ from scipy.spatial.transform import Rotation
 from src.control.arm_controller import ArmController
 from src.model.ur3e import UR3eModel
 from src.perception.camera_model import CameraModel
-from src.sim import CameraNoiseConfig, TaskSim
+from src.sim import CameraNoiseConfig, CubeMotionConfig, TaskSim
 from src.sim.randomize import CUBE_HALF, TABLE_Z
 from src.task.pick_place import PickPlace
 
@@ -57,6 +60,9 @@ class TrialMonitor:
         self.cube_truth_at_estimate = None
         # Horizontal cube-to-TCP offset when the cube first leaves the table: how well the grasp was centred.
         self.grasp_offset = None
+        # Horizontal cube-to-TCP distance while the arm hovers above the moving cube (TRACK, after the move from
+        # the observe pose): how closely the arm follows.
+        self.track_lag = []
 
     def step(self, pp: PickPlace) -> None:
         if pp.cube_estimate is not None and pp.cube_estimate is not self._estimate_seen:
@@ -65,6 +71,8 @@ class TrialMonitor:
             self.cube_truth_at_estimate = (gt["cube_pos"].copy(), 2 * np.arctan2(gt["cube_quat"][3], gt["cube_quat"][0]))
         gt = self.sim.ground_truth()
         cube_z = gt["cube_pos"][2]
+        if pp.state == "TRACK" and pp.progress >= 1.0 and np.linalg.norm(gt["cube_vel"][:2]) > 1e-3:
+            self.track_lag.append(float(np.linalg.norm(gt["cube_pos"][:2] - gt["tcp_pos"][:2])))
         if self.grasp_offset is None and cube_z - (TABLE_Z + CUBE_HALF) > 0.01:
             self.grasp_offset = float(np.linalg.norm(gt["cube_pos"][:2] - gt["tcp_pos"][:2]))
         if cube_z - (TABLE_Z + CUBE_HALF) > LIFT_HEIGHT:
@@ -84,6 +92,7 @@ class TrialMonitor:
             "place_err": place_err,
             "max_lift_time": self.max_lift_time,
             "grasp_offset": self.grasp_offset,
+            "track_lag_rms": float(np.sqrt(np.mean(np.square(self.track_lag)))) if self.track_lag else None,
         }
 
 
@@ -166,12 +175,18 @@ def info_panel(pp: PickPlace, monitor: TrialMonitor, seed: int, level: str, mode
                  f"   {abs(np.rad2deg(yaw_err)):5.2f} deg", 14, 142)
     else:
         put(img, "cube            not estimated yet", 14, 118)
+    ekf = pp.cube_ekf
+    if ekf is not None:
+        sigma_xy = 2e3 * np.sqrt(np.max(np.linalg.eigvalsh(ekf.P[:2, :2])))
+        put(img, f"cube v (mm/s)   {ekf.velocity[0]*1e3:6.1f},{ekf.velocity[1]*1e3:6.1f}"
+                 f"   {gt['cube_vel'][0]*1e3:6.1f},{gt['cube_vel'][1]*1e3:6.1f}"
+                 f"   EKF 2-sigma xy {sigma_xy:4.1f} mm", 14, 210, (200, 200, 200), 0.45)
     zone = pp.zone_estimate
     if zone is not None and np.all(np.isfinite(zone.xy)):
         put(img, f"zone x,y (mm)   {zone.xy[0]*1e3:6.1f},{zone.xy[1]*1e3:6.1f}"
                  f"   {gt['zone_pos'][0]*1e3:6.1f},{gt['zone_pos'][1]*1e3:6.1f}"
                  f"   {np.linalg.norm(zone.xy - gt['zone_pos'][:2])*1e3:5.1f} mm", 14, 166)
-        put(img, f"zone fully observed: {zone.complete}", 14, 190, (200, 200, 200), 0.45)
+        put(img, f"zone fully observed: {zone.complete}", 14, 188, (200, 200, 200), 0.45)
     else:
         put(img, "zone            not estimated yet", 14, 166)
 
@@ -227,8 +242,8 @@ class Display:
 
 # ---- trials ----------------------------------------------------------------------------------------
 
-def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="pbvs_full", push=0.0,
-              push_at="approach_start", display=None) -> dict:
+def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="open", push=0.0,
+              push_at="approach_start", display=None, viewer=None) -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
     monitor = TrialMonitor(sim)
@@ -242,10 +257,21 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="pbvs_ful
         disturbance.step(pp)
         monitor.step(pp)
         count += 1
-        if display is not None and count % steps_per_frame == 0:
+        if count % steps_per_frame:
+            return
+        if display is not None:
             display.show(pp, monitor, seed, level, mode, wall_start)
             if display.quit:
                 pp.timeout = 0.0  # ends the run at the next timeout check
+        if viewer is not None:
+            if not viewer.is_running():
+                pp.timeout = 0.0
+                return
+            if display is None or not display.window:  # otherwise Display already paces to real time
+                lag = pp.elapsed - (time.perf_counter() - wall_start)
+                if lag > 0:
+                    time.sleep(lag)
+            viewer.sync()
 
     pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach)
     outcome = pick_place.run(timeout=timeout)
@@ -258,8 +284,20 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="pbvs_ful
         "no_detection": attempts.count("none") / max(len(attempts), 1),
         "rejected": attempts.count("rejected"),
     }
+    track = None
+    if pick_place.track_log:
+        statuses = [e["status"] for e in pick_place.track_log]
+        stop = pick_place.track_stop_time
+        true_stop = sim.cube_motion.stop_time if sim.cube_motion is not None else None
+        track = {
+            "stop_delay": None if stop is None or true_stop is None else stop - true_stop,
+            "no_detection": statuses.count("none") / len(statuses),
+            "rejected": statuses.count("rejected"),
+            "reinit": statuses.count("reinit"),
+        }
     return {"seed": seed, "pipeline_ok": outcome["ok"], "reason": outcome["reason"],
-            "failed_state": failed_state, "sim_time": outcome["elapsed"], "transit": transit, **result}
+            "failed_state": failed_state, "sim_time": outcome["elapsed"], "transit": transit, "track": track,
+            **result}
 
 
 def main():
@@ -275,18 +313,24 @@ def main():
                    help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
     p.add_argument("--nominal-camera", action="store_true",
                    help="nominal K and camera mount instead of configs/camera_calib.json")
-    p.add_argument("--approach", default="pbvs_full", choices=["pbvs_full", "pbvs", "open"],
-                   help="pbvs_full (default): visual servoing from the observe pose; pbvs: only from the "
-                        "pregrasp pose; open: look-then-move, for comparison")
+    p.add_argument("--approach", default="open", choices=["open", "pbvs", "pbvs_full", "track"],
+                   help="open (default): look-then-move; pbvs: visual servoing from the pregrasp pose; pbvs_full: "
+                        "also for the move from the observe pose (for the occluded levels); track: follow the cube "
+                        "with the cube EKF and PBVS, pick once it has stopped (for --moving-cube)")
     p.add_argument("--push-cube", type=float, default=0.0, metavar="M",
                    help="experiment: push the cube this many metres along +y (see --push-at)")
     p.add_argument("--push-at", default="approach_start", choices=["approach_start", "transit_mid"],
                    help="when to push: start of the approach (default) or half-way to the pregrasp pose")
     p.add_argument("--handeye-error-deg", type=float, default=0.0, metavar="DEG",
                    help="experiment: rotate the camera mount used by the pipeline by DEG about the camera x axis")
+    p.add_argument("--viewer", action="store_true",
+                   help="also show the run in the interactive MuJoCo viewer (display only, paced to real time)")
+    p.add_argument("--moving-cube", action="store_true",
+                   help="moving-cube task: from 0.5 s the cube slides in a straight line at 1-3 cm/s, then stops")
     args = p.parse_args()
 
-    sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig())
+    sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig(),
+                  cube_motion=CubeMotionConfig() if args.moving_cube else None)
     robot = UR3eModel()
     camera = CameraModel.nominal(robot) if args.nominal_camera else CameraModel.from_calibration()
     if args.handeye_error_deg:
@@ -296,28 +340,38 @@ def main():
                                      source=f"{camera.source} + {args.handeye_error_deg:g} deg error")
     show = not args.no_window
     display = Display(sim, show, args.record) if (show or args.record) else None
+    viewer = None
+    if args.viewer:
+        import mujoco.viewer
+
+        # Passive viewer: the pipeline keeps stepping the simulation, the viewer only draws sim.data.
+        viewer = mujoco.viewer.launch_passive(sim.model, sim.data)
 
     results = []
     try:
         for seed in range(args.seed, args.seed + args.trials):
             r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
-                          args.approach, args.push_cube, args.push_at, display)
+                          args.approach, args.push_cube, args.push_at, display, viewer)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"
             offset = "  -  " if r["grasp_offset"] is None else f"{r['grasp_offset']*1e3:5.1f}"
             print(f"seed {seed:4d}  {verdict:7s}  grasped={r['grasped']!s:5s}  grasp offset {offset} mm"
                   f"  place error {r['place_err']*1e3:6.1f} mm  sim time {r['sim_time']:5.1f} s{detail}", flush=True)
-            if display is not None and display.quit:
+            if (display is not None and display.quit) or (viewer is not None and not viewer.is_running()):
                 break
     finally:
         if display is not None:
             display.close()
+        if viewer is not None:
+            viewer.close()
         sim.close()
 
     if len(results) > 1:
         placed = [r for r in results if r["placed"]]
         push = f", push {args.push_cube*1e3:.0f} mm at {args.push_at}" if args.push_cube else ""
+        if args.moving_cube:
+            push += ", moving cube"
         if args.handeye_error_deg:
             push += f", hand-eye error {args.handeye_error_deg:g} deg"
         print(f"\n{args.level}, {args.mode.upper()}, {args.approach}{push}: {len(placed)}/{len(results)} placed, "
@@ -336,6 +390,18 @@ def main():
             print(f"TRANSIT: frozen steps median {100*np.median([x['frozen'] for x in transits]):.1f} %, "
                   f"no detection median {100*np.median([x['no_detection'] for x in transits]):.0f} % of vision "
                   f"updates, rejected measurements {sum(x['rejected'] for x in transits)}")
+        tracks = [r["track"] for r in results if r["track"] is not None]
+        if tracks:
+            delays = np.array([x["stop_delay"] for x in tracks if x["stop_delay"] is not None])
+            lags = np.array([r["track_lag_rms"] for r in results if r["track_lag_rms"] is not None]) * 1e3
+            line = (f"TRACK: rejected measurements {sum(x['rejected'] for x in tracks)}, "
+                    f"re-initialisations {sum(x['reinit'] for x in tracks)}")
+            if delays.size:
+                line += (f", stop declared {np.median(delays):.2f} s after the true stop (median, "
+                         f"min {delays.min():.2f}, max {delays.max():.2f})")
+            if lags.size:
+                line += f", TCP-to-cube lag while moving RMS median {np.median(lags):.1f} mm"
+            print(line)
         failures = {}
         for r in results:
             if not r["placed"]:
