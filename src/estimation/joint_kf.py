@@ -46,15 +46,13 @@ class JointKalmanFilter:
     ):
         """sigma_qd (rad/s per sqrt(s)) and sigma_d (N m per sqrt(s)) are continuous white-noise intensities
         on qd and d: unmodelled acceleration and the rate at which the lumped disturbance drifts."""
-        self.Ad, self.Bd = model.discretize()
-        self.C = model.C
+        self.sigma_qd, self.sigma_d = float(sigma_qd), float(sigma_d)
+        self.set_model(model)
 
         # Quantisation error treated as uniform noise with variance resolution^2 / 12, independent of
         # the Gaussian encoder noise.
         self.R = encoder_noise_std**2 + encoder_resolution**2 / 12.0
 
-        Qc = np.diag([0.0, sigma_qd**2, sigma_d**2])
-        self.Q = discrete_process_noise(model.A, Qc, model.dt)
 
         # Initialise from the first encoder reading.
         # Do not call update() again with this same y0 sample.
@@ -68,6 +66,14 @@ class JointKalmanFilter:
         # Last innovation and its predicted variance, for consistency checks (NIS) without ground truth.
         self.innovation = 0.0
         self.S = self.R
+
+    def set_model(self, model: JointSSModel) -> None:
+        """Use a new joint model (for example a new inertia J) from the next sample on; the estimate and its
+        covariance are kept."""
+        self.Ad, self.Bd = model.discretize()
+        self.C = model.C
+        Qc = np.diag([0.0, self.sigma_qd**2, self.sigma_d**2])
+        self.Q = discrete_process_noise(model.A, Qc, model.dt)
 
     def predict(self, u: float) -> None:
         """Propagate one sample with u = applied torque (after saturation) minus gravity compensation."""
@@ -123,6 +129,13 @@ class ArmObserver:
             JointKalmanFilter(model, y0[i], sigma_qd=sigma_qd[i], sigma_d=sigma_d[i], **kf_options)
             for i, model in enumerate(models)
         ]
+
+    def set_models(self, models: list[JointSSModel]) -> None:
+        """Replace the six joint models, keeping the estimates and covariances."""
+        if len(models) != N_JOINTS:
+            raise ValueError(f"Expected one model for each of the {N_JOINTS} joints")
+        for filt, model in zip(self.filters, models):
+            filt.set_model(model)
 
     def predict(self, u: np.ndarray) -> None:
         """Predict using u[i] = applied torque[i] (after saturation) - gravity compensation[i]."""

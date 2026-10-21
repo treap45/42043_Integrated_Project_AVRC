@@ -124,15 +124,18 @@ def sample_trial(seed: int, level: str = "L0", ws: WorkspaceConfig = WorkspaceCo
 class CubeMotionConfig:
     """Moving-cube task: the cube slides along the table in a straight line at constant speed, then stops.
 
-    The motion is drawn from its own random stream, so enabling it leaves the static part of a trial (cube start,
-    yaw, zone, occluders) exactly as without it.
+    The cube keeps moving well after the arm has reached it (about 3-4 s), so the arm is seen following it. The
+    place zone is fixed, since the task is about tracking the cube; the cube start stays the trial's random one
+    unless its path would pass the zone, in which case a new start is drawn. All of it comes from its own random
+    stream [seed, 4].
     """
 
     start_time: float = 0.5  # s; the OBSERVE capture happens at 0.2 s, so the first frame sees the cube at rest
-    speed: tuple = (0.01, 0.03)  # m/s
-    distance: tuple = (0.05, 0.12)  # m
+    speed: tuple = (0.01, 0.02)  # m/s
+    duration: tuple = (6.0, 9.0)  # s, so the slide is 6-18 cm long
     max_radius: float = 0.43  # m, end point to the base axis; past about 0.45 m the shoulder_pan joint oscillates
-    zone_clearance: float = 0.12  # m, end point to zone centre, so the cube does not stop on the zone
+    zone_xy: tuple | None = (0.30, 0.12)  # m, fixed place zone (inside the observe view); None keeps the trial's
+    zone_clearance: float = 0.12  # m, whole path to zone centre, so the cube never slides onto the zone
     max_tries: int = 1000
 
 
@@ -168,26 +171,32 @@ def _segment_distance(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
 
 
 def sample_cube_motion(seed: int, trial: TrialConfig, cfg: CubeMotionConfig = CubeMotionConfig(),
-                       ws: WorkspaceConfig = WorkspaceConfig()) -> CubeMotion:
-    """Random heading, speed and distance from the trial's cube position. The end point stays in the cube
-    sampling range and within reach, the cube does not stop on the zone, and the path keeps clear of occluders."""
+                       ws: WorkspaceConfig = WorkspaceConfig()) -> tuple[TrialConfig, CubeMotion]:
+    """Random heading, speed and duration from the cube start. Returns the trial with the fixed zone (and a new
+    cube start if the old one is too close to it) and the motion. The end point stays in the cube sampling range
+    and within reach, the whole path keeps clear of the zone, and the path keeps clear of occluders."""
     rng = np.random.default_rng([seed, 4])
     cube_r = np.sqrt(2) * CUBE_HALF
+    zone = np.asarray(trial.zone_xy if cfg.zone_xy is None else cfg.zone_xy, dtype=float)
     start = np.asarray(trial.cube_xy, dtype=float)
     for _ in range(cfg.max_tries):
-        heading, speed, dist = rng.uniform(0, 2 * np.pi), rng.uniform(*cfg.speed), rng.uniform(*cfg.distance)
+        if np.linalg.norm(start - zone) < cfg.zone_clearance:
+            start = np.array([rng.uniform(*ws.cube_x), rng.uniform(*ws.cube_y)])
+            continue
+        heading, speed, duration = rng.uniform(0, 2 * np.pi), rng.uniform(*cfg.speed), rng.uniform(*cfg.duration)
         direction = np.array([np.cos(heading), np.sin(heading)])
-        end = start + dist * direction
+        end = start + speed * duration * direction
         if not (ws.cube_x[0] <= end[0] <= ws.cube_x[1] and ws.cube_y[0] <= end[1] <= ws.cube_y[1]):
             continue
         if np.hypot(*end) > cfg.max_radius:
             continue
-        if np.linalg.norm(end - trial.zone_xy) < cfg.zone_clearance:
+        if _segment_distance(zone, start, end) < cfg.zone_clearance:
             continue
         if any(_segment_distance(np.array([o.x, o.y]), start, end) < o.radius + cube_r + ws.clearance
                for o in trial.occluders):
             continue
-        return CubeMotion(cfg.start_time, start.copy(), speed * direction, dist / speed)
+        trial = TrialConfig(trial.seed, trial.level, start.copy(), trial.cube_yaw, zone.copy(), trial.occluders)
+        return trial, CubeMotion(cfg.start_time, start.copy(), speed * direction, duration)
     raise RuntimeError(f"could not place a cube motion for seed {seed}")
 
 

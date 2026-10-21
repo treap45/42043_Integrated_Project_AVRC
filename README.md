@@ -62,21 +62,20 @@ Vision-guided pick and place with the noisy wrist RGB-D camera and the calibrate
 estimates next to the true values; press `q` to quit). Ground truth is read only to judge success and for display:
 
 ```bash
-python main.py                                  # L0, seed 0, LQR, look-then-move (open)
-python main.py --seed 7 --level L1 --mode pd --approach pbvs_full
+python main.py                                  # L0, seed 0, LQR: the cube slides, then stops; follow it (cube EKF + PBVS), pick once it stops
 python main.py --trials 20 --no-window          # seeds 0-19, prints success rate and failure states
-python main.py --no-camera-noise                # exact wrist RGB-D (by default the camera is noisy)
-python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
-python main.py --approach pbvs                  # PBVS from the pregrasp pose down to 60 mm above the cube
-python main.py --approach pbvs_full             # PBVS also for the move from the observe pose (TRANSIT)
-python main.py --push-cube 0.025 --approach pbvs           # push the cube 25 mm as the approach starts
-python main.py --push-cube 0.025                # same push with look-then-move, for comparison
-python main.py --push-cube 0.025 --push-at transit_mid --approach pbvs_full   # push half-way to the pregrasp pose
-python main.py --handeye-error-deg 2 --trials 20 --no-window   # experiment: 2 deg error in the camera mount
-python scripts/calibrate_camera.py              # recalibrate: writes configs/camera_calib.json used by main.py
 python main.py --record videos/pick_place.mp4 --no-window
 python main.py --viewer                         # also show the run in the interactive MuJoCo viewer
-python main.py --moving-cube --approach track   # the cube slides, then stops: follow it (cube EKF + PBVS), pick once it stops
+python main.py --no-camera-noise                # exact wrist RGB-D (by default the camera is noisy)
+python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
+python main.py --no-moving-cube --approach open    # static cube, look-then-move
+python main.py --no-moving-cube --approach pbvs    # static cube, PBVS from the pregrasp pose down to 60 mm above the cube
+python main.py --no-moving-cube --approach pbvs --push-cube 0.025   # push the cube 25 mm as the approach starts
+python main.py --no-moving-cube --approach open --push-cube 0.025   # same push with look-then-move, for comparison
+python main.py --no-moving-cube --approach pbvs_full --push-cube 0.025 --push-at transit_mid   # push half-way there
+python main.py --no-moving-cube --seed 7 --level L1 --mode pd --approach pbvs_full
+python main.py --no-moving-cube --handeye-error-deg 2 --trials 20 --no-window   # experiment: 2 deg camera-mount error
+python scripts/calibrate_camera.py              # recalibrate: writes configs/camera_calib.json used by main.py
 ```
 
 Live simulation view (overview, wrist RGB, wrist depth, joint estimates; press `r` to re-randomise, `q` to quit).

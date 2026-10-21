@@ -8,6 +8,11 @@ g_hat comes from the payload-free controller-side model, u_fb is LQR (joint_lqr.
 (pid.py) feedback on the estimated state, and -d_hat cancels the estimated lumped disturbance (joint model:
 J * qdd = u + d). The observer is then propagated with the torque that was actually applied,
 u = clip(tau) - g_hat.
+
+Gain scheduling: each joint's inertia J is the diagonal of M(q), which changes with the arm's reach (shoulder_pan
+about 2x between the observe pose and r = 0.41 m). Every schedule_period control periods the joint models are
+rebuilt at the current estimate q_hat, and the observer and the feedback gains are recomputed from them, so the
+designed bandwidth and damping hold across the workspace.
 """
 
 import numpy as np
@@ -37,9 +42,12 @@ class ArmController:
         qd_max=1.0,
         u_max=(20.0, 20.0, 10.0, 4.0, 4.0, 4.0),
         use_disturbance_ff: bool = True,
+        schedule_period: int = 50,
     ):
         """mode "lqr" (default): Bryson-weighted LQR with q_max, qd_max, u_max (scalars or one per joint).
-        mode "pd": critically damped PD at pd_bandwidth_hz per joint, the baseline for comparison."""
+        mode "pd": critically damped PD at pd_bandwidth_hz per joint, the baseline for comparison.
+        schedule_period: control periods between gain-scheduling updates (50 = 0.1 s); 0 keeps the models built
+        at y0 for the whole run (the original fixed-gain design)."""
         y0 = np.asarray(y0, dtype=float)
         if y0.shape != (N_JOINTS,):
             raise ValueError(f"y0 must have shape ({N_JOINTS},), got {y0.shape}")
@@ -55,16 +63,22 @@ class ArmController:
         self.mode = mode
         self.use_disturbance_ff = bool(use_disturbance_ff)
         self._first = True
+        self.schedule_period = int(schedule_period)
+        self._steps = 0
+        self._gain_options = dict(pd_bandwidth_hz=pd_bandwidth_hz, q_max=q_max, qd_max=qd_max, u_max=u_max)
+        self.gains = self._make_gains(self.models)
 
-        if mode == "pd":
-            self.gains = ArmPD(self.models, pd_bandwidth_hz)
-        else:
-            self.gains = ArmLQR(
-                self.models,
-                q_max=q_max,
-                qd_max=qd_max,
-                u_max=u_max,
-            )
+    def _make_gains(self, models):
+        options = self._gain_options
+        if self.mode == "pd":
+            return ArmPD(models, options["pd_bandwidth_hz"])
+        return ArmLQR(models, q_max=options["q_max"], qd_max=options["qd_max"], u_max=options["u_max"])
+
+    def _reschedule(self, q_hat: np.ndarray) -> None:
+        """Rebuild the joint models at q_hat and recompute the observer and feedback gains from them."""
+        self.models = build_joint_models(self.robot, q_hat, self.dt)
+        self.observer.set_models(self.models)
+        self.gains = self._make_gains(self.models)
 
     @property
     def xhat(self) -> np.ndarray:
@@ -90,6 +104,10 @@ class ArmController:
             self._first = False
         else:
             self.observer.update(y)
+
+        self._steps += 1
+        if self.schedule_period > 0 and self._steps % self.schedule_period == 0:
+            self._reschedule(self.observer.xhat[:, 0])
 
         x = self.observer.xhat
         qhat = x[:, 0]

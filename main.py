@@ -1,19 +1,18 @@
 """Run the vision-guided pick-and-place: one command for the demo and for batches of trials.
 
-    python main.py                                  # live window, L0, seed 0, LQR, look-then-move
-    python main.py --seed 7 --level L1 --mode pd --approach pbvs_full
+    python main.py                                  # live window, L0, seed 0, LQR: the cube slides, then stops;
+                                                    # follow it (cube EKF + PBVS) and pick once it has stopped
     python main.py --trials 20 --no-window          # seeds 0-19, prints a summary
     python main.py --record videos/pick_place.mp4 --no-window
+    python main.py --viewer                         # also show the run in the interactive MuJoCo viewer
     python main.py --no-camera-noise                # exact wrist RGB-D (noise is on by default)
     python main.py --nominal-camera                 # nominal K and camera mount instead of the calibration
-    python main.py --approach pbvs                  # PBVS from the pregrasp pose down to 60 mm above the cube
-    python main.py --approach pbvs_full             # PBVS also for the move from the observe pose (TRANSIT)
-    python main.py --push-cube 0.025 --approach pbvs   # push the cube 25 mm when the approach starts
-    python main.py --push-cube 0.025 --push-at transit_mid --approach pbvs_full   # push half-way to the pregrasp pose
-    python main.py --handeye-error-deg 2            # experiment: tilt the calibrated camera mount by 2 deg
-    python main.py --viewer                         # also show the run in the interactive MuJoCo viewer
-    python main.py --moving-cube                    # the cube slides in a straight line, then stops
-    python main.py --moving-cube --approach track   # follow the moving cube (cube EKF + PBVS), pick once it stops
+    python main.py --no-moving-cube --approach open    # static cube, look-then-move
+    python main.py --no-moving-cube --approach pbvs    # static cube, PBVS from the pregrasp pose
+    python main.py --no-moving-cube --approach pbvs --push-cube 0.025   # push the cube 25 mm as the approach starts
+    python main.py --no-moving-cube --approach pbvs_full --push-cube 0.025 --push-at transit_mid
+    python main.py --no-moving-cube --seed 7 --level L1 --mode pd --approach pbvs_full
+    python main.py --no-moving-cube --handeye-error-deg 2   # experiment: tilt the calibrated camera mount by 2 deg
 
 The pipeline (src/task/pick_place.py) only sees encoder readings and the wrist camera. Ground truth is read
 here, in TrialMonitor, solely to judge success (project plan section 6) and to show the true state next to
@@ -242,10 +241,11 @@ class Display:
 
 # ---- trials ----------------------------------------------------------------------------------------
 
-def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="open", push=0.0,
-              push_at="approach_start", display=None, viewer=None) -> dict:
+def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", push=0.0,
+              push_at="approach_start", display=None, viewer=None, fixed_gains=False) -> dict:
     sim.reset(seed, level)
-    ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode)
+    ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode,
+                         schedule_period=0 if fixed_gains else 50)
     monitor = TrialMonitor(sim)
     disturbance = CubePush(sim, push, push_at)
     steps_per_frame = max(1, round(1.0 / (FPS * sim.dt)))
@@ -313,10 +313,10 @@ def main():
                    help="exact wrist RGB-D; by default the camera is noisy (src/sim/sensors.py CameraNoiseConfig)")
     p.add_argument("--nominal-camera", action="store_true",
                    help="nominal K and camera mount instead of configs/camera_calib.json")
-    p.add_argument("--approach", default="open", choices=["open", "pbvs", "pbvs_full", "track"],
-                   help="open (default): look-then-move; pbvs: visual servoing from the pregrasp pose; pbvs_full: "
-                        "also for the move from the observe pose (for the occluded levels); track: follow the cube "
-                        "with the cube EKF and PBVS, pick once it has stopped (for --moving-cube)")
+    p.add_argument("--approach", default="track", choices=["track", "open", "pbvs", "pbvs_full"],
+                   help="track (default): follow the cube with the cube EKF and PBVS, pick once it has stopped; "
+                        "open: look-then-move; pbvs: visual servoing from the pregrasp pose; pbvs_full: also for the "
+                        "move from the observe pose (for the occluded levels)")
     p.add_argument("--push-cube", type=float, default=0.0, metavar="M",
                    help="experiment: push the cube this many metres along +y (see --push-at)")
     p.add_argument("--push-at", default="approach_start", choices=["approach_start", "transit_mid"],
@@ -325,8 +325,11 @@ def main():
                    help="experiment: rotate the camera mount used by the pipeline by DEG about the camera x axis")
     p.add_argument("--viewer", action="store_true",
                    help="also show the run in the interactive MuJoCo viewer (display only, paced to real time)")
-    p.add_argument("--moving-cube", action="store_true",
-                   help="moving-cube task: from 0.5 s the cube slides in a straight line at 1-3 cm/s, then stops")
+    p.add_argument("--moving-cube", action=argparse.BooleanOptionalAction, default=True,
+                   help="moving-cube task (default): from 0.5 s the cube slides in a straight line at 1-2 cm/s for "
+                        "6-9 s, then stops, and the place zone is fixed; --no-moving-cube: static cube, random zone")
+    p.add_argument("--fixed-gains", action="store_true",
+                   help="comparison: joint models and gains from the observe pose only, no gain scheduling")
     args = p.parse_args()
 
     sim = TaskSim(camera_noise=None if args.no_camera_noise else CameraNoiseConfig(),
@@ -351,7 +354,7 @@ def main():
     try:
         for seed in range(args.seed, args.seed + args.trials):
             r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
-                          args.approach, args.push_cube, args.push_at, display, viewer)
+                          args.approach, args.push_cube, args.push_at, display, viewer, args.fixed_gains)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"
@@ -372,6 +375,8 @@ def main():
         push = f", push {args.push_cube*1e3:.0f} mm at {args.push_at}" if args.push_cube else ""
         if args.moving_cube:
             push += ", moving cube"
+        if args.fixed_gains:
+            push += ", fixed gains"
         if args.handeye_error_deg:
             push += f", hand-eye error {args.handeye_error_deg:g} deg"
         print(f"\n{args.level}, {args.mode.upper()}, {args.approach}{push}: {len(placed)}/{len(results)} placed, "

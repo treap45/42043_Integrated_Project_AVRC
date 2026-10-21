@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.control.arm_controller import ArmController  # noqa: E402
 from src.model.ur3e import UR3eModel  # noqa: E402
 from src.sim import CubeMotionConfig, TaskSim  # noqa: E402
-from src.sim.randomize import CUBE_HALF, TABLE_Z, sample_trial  # noqa: E402
+from src.sim.randomize import CUBE_HALF, TABLE_Z, _segment_distance, sample_trial  # noqa: E402
 
 N_SEEDS = 20
 AFTER_STOP = 1.0  # s of physics after the stop, to see that the cube stays where it was left
@@ -59,11 +59,19 @@ def main():
     robot = UR3eModel()
     ok = True
 
-    print("== 1. Static part of the trial is unchanged by the motion ==")
-    same = all(np.array_equal(sim.reset(s).cube_xy, sample_trial(s).cube_xy)
-               and np.array_equal(sim.trial.zone_xy, sample_trial(s).zone_xy) for s in range(N_SEEDS))
+    print("== 1. Fixed place zone, path clear of it, cube start kept unless it was in the way ==")
+    cfg = CubeMotionConfig()
+    zone = np.array(cfg.zone_xy)
+    same = True
+    for s in range(N_SEEDS):
+        trial, static = sim.reset(s), sample_trial(s)
+        m = sim.cube_motion
+        start_kept = np.array_equal(trial.cube_xy, static.cube_xy)
+        start_moved_ok = np.linalg.norm(static.cube_xy - zone) < cfg.zone_clearance
+        same &= (np.array_equal(trial.zone_xy, zone) and (start_kept or start_moved_ok)
+                 and _segment_distance(zone, m.start_xy, m.end_xy) >= cfg.zone_clearance)
     ok &= same
-    print(f"  cube start and zone identical to the static trial for seeds 0-{N_SEEDS - 1}: {same}")
+    print(f"  seeds 0-{N_SEEDS - 1}: {same}")
 
     print(f"\n== 2. Motion, seeds 0-{N_SEEDS - 1} (arm held at observe) ==")
     for seed in range(N_SEEDS):

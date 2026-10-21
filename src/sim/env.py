@@ -62,6 +62,10 @@ class TaskSim:
         """Start a new trial: arm at the "observe" keyframe, gripper open, scene randomised from seed."""
         mujoco.mj_resetDataKeyframe(self.model, self.data, self._key)
         self.trial = sample_trial(seed, level, self.workspace)
+        if self.cube_motion_cfg is not None:
+            # The moving-cube task fixes the place zone and may move the cube start off the zone's way.
+            self.trial, self.cube_motion = sample_cube_motion(seed, self.trial, self.cube_motion_cfg, self.workspace)
+            self._cube_released = False
         apply_trial(self.model, self.data, self.trial)
         # Sensor noise is seeded per trial too, so a failure can be replayed exactly.
         self.encoders = JointEncoders(self.encoder_cfg, np.random.default_rng([seed, 1]))
@@ -70,9 +74,6 @@ class TaskSim:
                                             np.random.default_rng([seed, 2]))
             self._display_noise = CameraNoise(self.camera_noise_cfg, self.camera._K_true,
                                               np.random.default_rng([seed, 3]))
-        if self.cube_motion_cfg is not None:
-            self.cube_motion = sample_cube_motion(seed, self.trial, self.cube_motion_cfg, self.workspace)
-            self._cube_released = False
         mujoco.mj_forward(self.model, self.data)
         return self.trial
 
