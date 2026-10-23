@@ -1,0 +1,15 @@
+{
+  "source": "RealSense D435i factory calibration, read 2026-10-23 with realsense_lab (alignment='colour': depth registered to the RGB image)",
+  "serial": "027322070904",
+  "firmware": "5.17.0.10",
+  "width": 640,
+  "height": 480,
+  "K": [
+    [611.7501831054688, 0.0, 317.53125],
+    [0.0, 610.4718017578125, 234.28211975097656],
+    [0.0, 0.0, 1.0]
+  ],
+  "dist": [0.0, 0.0, 0.0, 0.0, 0.0],
+  "dist_model": "inverse_brown_conrady",
+  "depth_scale_m": 0.001
+}
