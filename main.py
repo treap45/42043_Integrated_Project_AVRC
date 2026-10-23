@@ -326,8 +326,8 @@ def main():
     p.add_argument("--viewer", action="store_true",
                    help="also show the run in the interactive MuJoCo viewer (display only, paced to real time)")
     p.add_argument("--moving-cube", action=argparse.BooleanOptionalAction, default=True,
-                   help="moving-cube task (default): from 0.5 s the cube slides in a straight line at 1-2 cm/s for "
-                        "6-9 s, then stops, and the place zone is fixed; --no-moving-cube: static cube, random zone")
+                   help="moving-cube task (default): from 0.5 s the cube slides in a straight line at 1-1.5 cm/s for "
+                        "9-11 s, then stops, and the place zone is fixed; --no-moving-cube: static cube, random zone")
     p.add_argument("--fixed-gains", action="store_true",
                    help="comparison: joint models and gains from the observe pose only, no gain scheduling")
     args = p.parse_args()

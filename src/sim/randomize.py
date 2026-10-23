@@ -131,8 +131,8 @@ class CubeMotionConfig:
     """
 
     start_time: float = 0.5  # s; the OBSERVE capture happens at 0.2 s, so the first frame sees the cube at rest
-    speed: tuple = (0.01, 0.02)  # m/s
-    duration: tuple = (6.0, 9.0)  # s, so the slide is 6-18 cm long
+    speed: tuple = (0.01, 0.015)  # m/s
+    duration: tuple = (9.0, 11.0)  # s: 9-16.5 cm in all, at least 5 cm of it with the arm already above (from about 4 s)
     max_radius: float = 0.43  # m, end point to the base axis; past about 0.45 m the shoulder_pan joint oscillates
     zone_xy: tuple | None = (0.30, 0.12)  # m, fixed place zone (inside the observe view); None keeps the trial's
     zone_clearance: float = 0.12  # m, whole path to zone centre, so the cube never slides onto the zone

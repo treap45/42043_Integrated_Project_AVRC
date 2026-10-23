@@ -144,7 +144,8 @@ def run(sim, robot, camera, seed: int, sigma_a: float, R=None) -> dict:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--sigma-a", type=float, nargs="+", default=[0.05])
+    p.add_argument("--sigma-a", type=float, nargs="+", default=[0.01],
+                   help="process noise (m/s^2); default 0.01 as in CubeEKF")
     p.add_argument("--seeds", type=int, default=N_SEEDS)
     p.add_argument("--r-std", type=float, nargs=3, metavar=("UV_PX", "Z_M", "PSI_RAD"), default=None,
                    help="measurement std for u and v (px), Z (m), psi (rad)")
