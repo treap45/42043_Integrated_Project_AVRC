@@ -97,13 +97,13 @@ python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
 
 Tool: Claude Code (Anthropic).
 
-Purpose: setting up the environment and the simulation (scene, simulation interface, sensor models, randomisation); writing test, demo and evaluation scripts; reviewing and revising the author's code; and explaining concepts. All AI-assisted code was reviewed and tested by the author.
+Purpose: setting up the environment and the simulation (scene, simulation interface, sensor models, randomisation); writing test, demo and evaluation scripts; reviewing and revising the author's code; writing the real-robot interface and calibration tooling; and explaining concepts. All AI-assisted code was reviewed and tested by the author.
 
 ## Acknowledgements
 
 - **Robot model:** UR3e MJCF from [SouthColumn76/universal_robots_ur3e](https://github.com/SouthColumn76/universal_robots_ur3e) (BSD-3-Clause), the model used in the course tutorial [rFalque/mujoco_UR3_tutorial](https://github.com/rFalque/mujoco_UR3_tutorial); arm actuators changed to torque motors (see the header of `assets/scene.xml`).
 - **Gripper and camera models:** Robotiq 2F-85 (BSD-2-Clause) and RealSense D435i (Apache-2.0) from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie).
 - **Simulator:** [MuJoCo](https://mujoco.org) (rendering, physics, and the controller-side model for kinematics and dynamics).
-- **OpenCV:** colour segmentation (HSV conversion, morphology, connected components), `minAreaRect`, checkerboard detection (`findChessboardCornersSB`), `calibrateCamera`, `solvePnP` and `calibrateHandEye` (Park and Martin method: F. C. Park and B. J. Martin, "Robot sensor calibration: solving AX = XB on the Euclidean group", IEEE Trans. Robotics and Automation, 1994).
-- **SciPy:** `solve_discrete_are` (LQR gains), `expm` (discretisation and Van Loan process noise), `CubicSpline` (Cartesian paths).
+- **OpenCV:** colour segmentation (HSV conversion, morphology, connected components), `minAreaRect`, checkerboard detection (`findChessboardCornersSB`), `calibrateCamera`, `solvePnP` (including `SOLVEPNP_IPPE_SQUARE` for the ArUco marker), ArUco detection (`cv2.aruco`) and `calibrateHandEye` (Park and Martin method: F. C. Park and B. J. Martin, "Robot sensor calibration: solving AX = XB on the Euclidean group", IEEE Trans. Robotics and Automation, 1994).
+- **SciPy:** `solve_discrete_are` (LQR gains), `expm` (discretisation and Van Loan process noise), `CubicSpline` (Cartesian paths), `least_squares` (eye-to-hand refinement).
 - **Robotics Toolbox for Python:** used only in the environment check `scripts/check_env.py`; the pipeline does not use it.
