@@ -2,8 +2,8 @@
 
 A trial is fully determined by (seed, level). Difficulty levels follow the project plan:
     L0  no occluders; the place zone lies fully inside the wrist camera's view from the "observe" keyframe
-    L1  one occluder near the cube; the place zone may lie anywhere in its range
-    L2  two or three occluders near the cube; the place zone may lie anywhere in its range
+    L1  one to three occluders near the cube; the place zone may lie anywhere in its range
+(L1 and L2 of the first design, one occluder and two or three, were merged into this one occluded level.)
 L3 (cube fully hidden from the initial view) is not implemented.
 """
 
@@ -18,8 +18,8 @@ ZONE_HALF = 0.05
 N_OCCLUDERS = 3
 PARK_POS = np.array([0.0, 0.9, -1.0])  # unused occluders are parked under the floor
 
-LEVEL_OCCLUDERS = {"L0": (0, 0), "L1": (1, 1), "L2": (2, 3)}
-LEVEL_ZONE_IN_VIEW = {"L0": True, "L1": False, "L2": False}
+LEVEL_OCCLUDERS = {"L0": (0, 0), "L1": (1, 3)}
+LEVEL_ZONE_IN_VIEW = {"L0": True, "L1": False}
 
 
 @dataclass(frozen=True)

@@ -83,7 +83,7 @@ The arm is driven by the joint controller from encoder readings only:
 
 ```bash
 python scripts/demo_sim.py --level L1                    # LQR, hold the observe pose
-python scripts/demo_sim.py --level L2 --mode pd --motion   # PD, track a slow sinusoidal reference
+python scripts/demo_sim.py --level L1 --mode pd --motion   # PD, track a slow sinusoidal reference
 python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
 ```
 
