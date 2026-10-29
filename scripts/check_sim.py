@@ -28,7 +28,7 @@ def red_pixels(rgb: np.ndarray) -> int:
 def check_levels(sim: TaskSim) -> bool:
     print(f"== 1. Randomisation ({N_SEEDS} seeds per level, {SETTLE_S} s settle) ==")
     ok = True
-    for level in ["L0", "L1", "L2"]:
+    for level in ["L0", "L1"]:
         n_occ, pen, moved, visible = [], 0, 0, []
         for seed in range(N_SEEDS):
             sim.reset(seed, level)
@@ -53,9 +53,9 @@ def check_levels(sim: TaskSim) -> bool:
 
 def check_reproducible(sim: TaskSim) -> bool:
     print("\n== 2. Reproducibility ==")
-    a = sim.reset(17, "L2")
+    a = sim.reset(17, "L1")
     qa = [sim.read_joint_positions() for _ in range(5)]
-    b = sim.reset(17, "L2")
+    b = sim.reset(17, "L1")
     qb = [sim.read_joint_positions() for _ in range(5)]
     same = (np.allclose(a.cube_xy, b.cube_xy) and a.cube_yaw == b.cube_yaw and len(a.occluders) == len(b.occluders)
             and np.allclose(qa, qb))

@@ -304,7 +304,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--seed", type=int, default=0, help="first seed")
     p.add_argument("--trials", type=int, default=1, help="number of consecutive seeds to run")
-    p.add_argument("--level", default="L0", choices=["L0", "L1", "L2"])
+    p.add_argument("--level", default="L0", choices=["L0", "L1"])
     p.add_argument("--mode", default="lqr", choices=["lqr", "pd"], help="joint feedback law")
     p.add_argument("--timeout", type=float, default=60.0, help="simulated seconds per trial")
     p.add_argument("--record", type=Path, help="write an mp4 of the composite view")

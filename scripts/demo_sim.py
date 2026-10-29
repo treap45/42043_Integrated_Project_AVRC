@@ -5,7 +5,7 @@ The scene is re-randomised every --reset-every seconds (or press "r"); press "q"
 
 Run from the repo root with the venv active:
     python scripts/demo_sim.py                              # live window, L0, LQR, hold the observe pose
-    python scripts/demo_sim.py --level L2 --mode pd --motion
+    python scripts/demo_sim.py --level L1 --mode pd --motion
     python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
 
 Ground truth (true joint velocity) is read only to display it next to the estimate. --gt-hold replaces the
@@ -129,7 +129,7 @@ def info_panel(sim, seed, level, status, q_meas, xhat, qd_true, history) -> np.n
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--level", default="L0", choices=["L0", "L1", "L2"])
+    p.add_argument("--level", default="L0", choices=["L0", "L1"])
     p.add_argument("--mode", default="lqr", choices=["lqr", "pd"], help="joint feedback law")
     p.add_argument("--no-ff", action="store_true", help="disable the disturbance feed-forward (-d_hat)")
     p.add_argument("--motion", action="store_true", help="track a slow sinusoidal reference instead of holding")

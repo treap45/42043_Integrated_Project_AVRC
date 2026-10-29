@@ -62,12 +62,12 @@ def check_parked() -> bool:
     print("== 1. Board parked during trials ==")
     sim = TaskSim()
     z = []
-    for level in ["L0", "L1", "L2"]:
+    for level in ["L0", "L1"]:
         for seed in range(20):
             sim.reset(seed, level)
             z.append(sim.ground_truth()["board_pos"][2])
     ok = max(z) < 0
-    print(f"  board z after reset (60 trials): max {max(z):.2f} m  {'PASS' if ok else 'FAIL'}")
+    print(f"  board z after reset ({len(z)} trials): max {max(z):.2f} m  {'PASS' if ok else 'FAIL'}")
     return ok
 
 
