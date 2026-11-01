@@ -3,8 +3,10 @@ import dataclasses
 import numpy as np
 
 from src.control.pbvs import TRANSIT_V_MAX, TRANSIT_W_MAX, joint_velocity, pbvs_twist, pose_error
+from src.active_vision.next_view import select_next_view
 from src.estimation.cube_ekf import CubeEKF
-from src.perception.cube_pose import cube_measurement, estimate_cube
+from src.perception.cube_pose import CUBE_HALF_HEIGHT, cube_measurement, estimate_cube
+from src.perception.occluders import estimate_occluders, fuse_occluders
 from src.perception.place_zone import estimate_zone
 from src.perception.camera_model import CameraModel
 from src.perception.projection import backproject, camera_to_world
@@ -14,7 +16,8 @@ from src.perception.segmentation import (
     color_mask,
     largest_component,
 )
-from src.planning.grasp import grasp_poses, place_poses, yaw_candidates
+from src.planning.clearance import grasp_clearance, lift_height
+from src.planning.grasp import GRASP_DEPTH, grasp_poses, place_poses, yaw_candidates
 from src.planning.ik import solve_ik
 from src.planning.trajectory import CartesianLine, GoalRelativeQuintic, QuinticJoint
 
@@ -37,7 +40,8 @@ class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
     def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None,
-                 approach: str = "track"):
+                 approach: str = "track", occluders: str = "off", occluder_margin: float = 0.0,
+                 max_extra_views: int = 2):
         """on_step(pick_place) is called after every control period, for display and logging only.
         camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values.
         approach: "track" (default, see below); "open" descends straight from the pregrasp pose planned at OBSERVE
@@ -45,9 +49,15 @@ class PickPlace:
         "pbvs" moves to that pregrasp pose, then servos the TCP on the cube before the final descent;
         "pbvs_full" also servos the move from OBSERVE to the pregrasp pose (TRANSIT) on the cube, meant for
         the occluded levels; "track" follows a moving cube above it with PBVS on the cube EKF and starts the
-        approach once the EKF says the cube has stopped (TRACK)."""
+        approach once the EKF says the cube has stopped (TRACK).
+        occluders: "off" (default) ignores occluders; "conservative" estimates them in every captured frame and
+        keeps only grasp yaws that clear them by occluder_margin, treating unseen table as occupied, and lifts
+        and transports above them; "active" also takes up to max_extra_views more views (ACTIVE_VIEW), chosen
+        by src/active_vision/next_view.py, while no yaw is clear."""
         if approach not in ("pbvs_full", "pbvs", "open", "track"):
             raise ValueError("approach must be 'pbvs_full', 'pbvs', 'open' or 'track'")
+        if occluders not in ("off", "conservative", "active"):
+            raise ValueError("occluders must be 'off', 'conservative' or 'active'")
         self.sim = sim
         self.robot = robot
         self.ctrl = ctrl
@@ -67,6 +77,12 @@ class PickPlace:
         self.cube_ekf = None
         self.cube_estimate = None
         self.zone_estimate = None
+        self.occluder_mode = occluders
+        self.occluder_margin = float(occluder_margin)
+        self.max_extra_views = int(max_extra_views)
+        self.occluders_per_view = []  # occluder estimates of every captured frame
+        self.occluder_views = []  # (K, cam_pos, cam_rot, (width, height)) of those frames
+        self.occluders = []  # fused over the views
 
     def _control_step(self, q_ref: np.ndarray, qd_ref: np.ndarray) -> None:
         y = self.sim.read_joint_positions()
@@ -190,11 +206,47 @@ class PickPlace:
             points_w = camera_to_world(points_cv, cam_pos, cam_rot)
             zone_estimate = estimate_zone(points_w, zone_mask)
 
+        if self.occluder_mode != "off":
+            self.occluders_per_view.append(estimate_occluders(rgb, depth, self.camera.K, cam_pos, cam_rot))
+            self.occluder_views.append((self.camera.K, cam_pos, cam_rot, (rgb.shape[1], rgb.shape[0])))
+            self.occluders = fuse_occluders(self.occluders_per_view)
+
         if cube_estimate is not None:
             self.cube_estimate = cube_estimate
         if zone_estimate is not None:
             self.zone_estimate = zone_estimate
         return cube_estimate, zone_estimate
+
+    def _yaw_clear(self, cube_pos, psi) -> bool:
+        if self.occluder_mode == "off":
+            return True
+        return grasp_clearance(cube_pos, psi, self.occluders, self.occluder_margin, self.occluder_views)[0]
+
+    def _active_views(self, cube) -> bool:
+        """ACTIVE_VIEW: while no grasp yaw is clear of the occluders, move to the view that shows most of what
+        the decision still lacks, and capture there. Returns False if a move or capture times out."""
+        size = self.occluder_views[0][3]
+        for _ in range(self.max_extra_views):
+            if any(self._yaw_clear(cube.pos, psi) for psi in yaw_candidates(cube.yaw)):
+                return True
+            q_now = self.ctrl.xhat[:, 0].copy()
+            view = select_next_view(self.robot, self.camera, self.q_observe, q_now, cube.pos, cube.yaw,
+                                    self.occluders, self.occluder_views, self.occluder_margin, size)
+            if view is None:
+                return True
+            if not self._move_joint("ACTIVE_VIEW", view["q"]):
+                return False
+            if not self._hold("ACTIVE_CAPTURE", 0.1):
+                return False
+            self._capture_estimates()
+        return True
+
+    def _clear_tcp_z(self, tcp_z: float) -> float:
+        """TCP height that keeps the held cube's bottom above every estimated occluder."""
+        if self.occluder_mode == "off":
+            return tcp_z
+        cube_bottom = tcp_z - GRASP_DEPTH - CUBE_HALF_HEIGHT
+        return lift_height(self.occluders, self.occluder_margin, cube_bottom) + GRASP_DEPTH + CUBE_HALF_HEIGHT
 
     def _capture_cube(self):
         """Capture one frame and return a valid cube estimate, or None."""
@@ -602,6 +654,8 @@ class PickPlace:
         candidates = []
 
         for psi in yaw_candidates(cube_yaw):
+            if not self._yaw_clear(cube_pos, psi):
+                continue
             pregrasp_pos, rotation = grasp_poses(cube_pos, psi)["pregrasp"]
             q_solution, ok = solve_ik(
                 self.robot,
@@ -677,9 +731,15 @@ class PickPlace:
             if zone is None or not zone.complete:
                 return self._fail("placement zone remains incomplete after ZONE_VIEW")
 
+        if self.occluder_mode == "active" and not self._active_views(cube):
+            return self._fail("ACTIVE_VIEW failed")
+
         q_now = self.ctrl.xhat[:, 0].copy()
         selected = self._select_grasp(cube.pos, cube.yaw, q_now)
         if selected is None:
+            if self.occluder_mode != "off" and not any(self._yaw_clear(cube.pos, psi)
+                                                       for psi in yaw_candidates(cube.yaw)):
+                return self._fail("no collision-free grasp yaw")
             return self._fail("no feasible pregrasp IK solution")
 
         psi, q_pregrasp = selected
@@ -724,13 +784,15 @@ class PickPlace:
         ):
             return self._fail("GRASP timed out")
 
+        p_lift = np.array([p_lift[0], p_lift[1], self._clear_tcp_z(p_lift[2])])
         if not self._move_cartesian("LIFT", p_grasp, p_lift, rotation, 1.5):
             return self._fail("LIFT failed")
 
         poses = place_poses(zone.xy, psi)
         p_above, place_rotation = poses["above"]
+        p_above = np.array([p_above[0], p_above[1], self._clear_tcp_z(p_above[2])])
         p_place = poses["place"][0]
-        p_retreat = poses["retreat"][0]
+        p_retreat = p_above.copy()
 
         q_current = self.ctrl.xhat[:, 0].copy()
         q_above, ok = solve_ik(

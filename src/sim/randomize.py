@@ -2,7 +2,7 @@
 
 A trial is fully determined by (seed, level). Difficulty levels follow the project plan:
     L0  no occluders; the place zone lies fully inside the wrist camera's view from the "observe" keyframe
-    L1  one to three occluders near the cube; the place zone may lie anywhere in its range
+    L1  one to three occluders near the cube; the place zone lies fully inside the initial view, as in L0
 (L1 and L2 of the first design, one occluder and two or three, were merged into this one occluded level.)
 L3 (cube fully hidden from the initial view) is not implemented.
 """
@@ -19,7 +19,7 @@ N_OCCLUDERS = 3
 PARK_POS = np.array([0.0, 0.9, -1.0])  # unused occluders are parked under the floor
 
 LEVEL_OCCLUDERS = {"L0": (0, 0), "L1": (1, 3)}
-LEVEL_ZONE_IN_VIEW = {"L0": True, "L1": False}
+LEVEL_ZONE_IN_VIEW = {"L0": True, "L1": True}
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ class WorkspaceConfig:
     clearance: float = 0.01  # minimum gap between objects (bounding circles)
     base_clearance: float = 0.20  # occluder bounding circle to robot base axis, keeps them clear of the arm
     max_tries: int = 1000
+    max_layouts: int = 100  # occluder layouts tried before giving up on placing the zone
 
 
 @dataclass
@@ -81,10 +82,25 @@ def sample_trial(seed: int, level: str = "L0", ws: WorkspaceConfig = WorkspaceCo
 
     cube_xy = np.array([u(ws.cube_x), u(ws.cube_y)])
     cube_yaw = u(ws.cube_yaw)
-    cube_r = np.sqrt(2) * CUBE_HALF
 
     lo, hi = LEVEL_OCCLUDERS[level]
     n_occ = int(rng.integers(lo, hi + 1))
+    # With the zone kept in view, occluders around a central cube can leave it no room: draw a new occluder
+    # layout then (trials that fit with the first layout are unchanged).
+    for _ in range(ws.max_layouts):
+        occluders = _sample_occluders(rng, seed, n_occ, cube_xy, ws)
+        zone_xy = _sample_zone(rng, cube_xy, occluders, LEVEL_ZONE_IN_VIEW[level], ws)
+        if zone_xy is not None:
+            break
+    else:
+        raise RuntimeError(f"could not place the place zone for seed {seed}")
+
+    return TrialConfig(seed, level, cube_xy, cube_yaw, zone_xy, occluders)
+
+
+def _sample_occluders(rng, seed: int, n_occ: int, cube_xy: np.ndarray, ws: WorkspaceConfig) -> list:
+    u = lambda lo_hi: rng.uniform(*lo_hi)  # noqa: E731
+    cube_r = np.sqrt(2) * CUBE_HALF
     occluders = []
     for _ in range(ws.max_tries):
         if len(occluders) == n_occ:
@@ -101,23 +117,20 @@ def sample_trial(seed: int, level: str = "L0", ws: WorkspaceConfig = WorkspaceCo
         occluders.append(occ)
     else:
         raise RuntimeError(f"could not place {n_occ} occluders for seed {seed}")
+    return occluders
 
+
+def _sample_zone(rng, cube_xy: np.ndarray, occluders: list, in_view: bool, ws: WorkspaceConfig) -> np.ndarray | None:
     zone_r = np.sqrt(2) * ZONE_HALF
-    if LEVEL_ZONE_IN_VIEW[level]:
-        zone_x, zone_y = ws.zone_x_in_view, ws.zone_y_in_view
-    else:
-        zone_x, zone_y = ws.zone_x, ws.zone_y
+    zone_x, zone_y = (ws.zone_x_in_view, ws.zone_y_in_view) if in_view else (ws.zone_x, ws.zone_y)
     for _ in range(ws.max_tries):
-        zone_xy = np.array([u(zone_x), u(zone_y)])
+        zone_xy = np.array([rng.uniform(*zone_x), rng.uniform(*zone_y)])
         if np.linalg.norm(zone_xy - cube_xy) < ws.zone_min_dist:
             continue
         if any(np.hypot(zone_xy[0] - o.x, zone_xy[1] - o.y) < zone_r + o.radius + ws.clearance for o in occluders):
             continue
-        break
-    else:
-        raise RuntimeError(f"could not place the place zone for seed {seed}")
-
-    return TrialConfig(seed, level, cube_xy, cube_yaw, zone_xy, occluders)
+        return zone_xy
+    return None
 
 
 @dataclass(frozen=True)

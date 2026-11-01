@@ -242,7 +242,8 @@ class Display:
 # ---- trials ----------------------------------------------------------------------------------------
 
 def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", push=0.0,
-              push_at="approach_start", display=None, viewer=None, fixed_gains=False) -> dict:
+              push_at="approach_start", display=None, viewer=None, fixed_gains=False, occluders="off",
+              occluder_margin=0.0) -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode,
                          schedule_period=0 if fixed_gains else 50)
@@ -273,7 +274,8 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", 
                     time.sleep(lag)
             viewer.sync()
 
-    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach)
+    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach, occluders=occluders,
+                           occluder_margin=occluder_margin)
     outcome = pick_place.run(timeout=timeout)
     result = monitor.result()
     failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
@@ -297,6 +299,7 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", 
         }
     return {"seed": seed, "pipeline_ok": outcome["ok"], "reason": outcome["reason"],
             "failed_state": failed_state, "sim_time": outcome["elapsed"], "transit": transit, "track": track,
+            "extra_views": max(len(pick_place.occluder_views) - 1, 0),
             **result}
 
 
@@ -328,6 +331,12 @@ def main():
     p.add_argument("--moving-cube", action=argparse.BooleanOptionalAction, default=True,
                    help="moving-cube task (default): from 0.5 s the cube slides in a straight line at 1-1.5 cm/s for "
                         "9-11 s, then stops, and the place zone is fixed; --no-moving-cube: static cube, random zone")
+    p.add_argument("--occluders", default="off", choices=["off", "conservative", "active"],
+                   help="occluder handling: off (default); conservative: estimate occluders, keep grasp yaws that "
+                        "clear them (unseen table counts as occupied), lift above them; active: also take up to two "
+                        "more views, chosen by what the grasp decision lacks (src/active_vision/next_view.py)")
+    p.add_argument("--occluder-margin", type=float, default=0.0, metavar="M",
+                   help="extra clearance (m) the grasp must keep from the estimated occluders (default 0)")
     p.add_argument("--fixed-gains", action="store_true",
                    help="comparison: joint models and gains from the observe pose only, no gain scheduling")
     args = p.parse_args()
@@ -354,13 +363,16 @@ def main():
     try:
         for seed in range(args.seed, args.seed + args.trials):
             r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
-                          args.approach, args.push_cube, args.push_at, display, viewer, args.fixed_gains)
+                          args.approach, args.push_cube, args.push_at, display, viewer, args.fixed_gains,
+                          args.occluders, args.occluder_margin)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"
             offset = "  -  " if r["grasp_offset"] is None else f"{r['grasp_offset']*1e3:5.1f}"
+            views = f"  extra views {r['extra_views']}" if args.occluders == "active" else ""
             print(f"seed {seed:4d}  {verdict:7s}  grasped={r['grasped']!s:5s}  grasp offset {offset} mm"
-                  f"  place error {r['place_err']*1e3:6.1f} mm  sim time {r['sim_time']:5.1f} s{detail}", flush=True)
+                  f"  place error {r['place_err']*1e3:6.1f} mm  sim time {r['sim_time']:5.1f} s{views}{detail}",
+                  flush=True)
             if (display is not None and display.quit) or (viewer is not None and not viewer.is_running()):
                 break
     finally:
@@ -379,6 +391,8 @@ def main():
             push += ", fixed gains"
         if args.handeye_error_deg:
             push += f", hand-eye error {args.handeye_error_deg:g} deg"
+        if args.occluders != "off":
+            push += f", occluders {args.occluders} (margin {args.occluder_margin * 1e3:g} mm)"
         print(f"\n{args.level}, {args.mode.upper()}, {args.approach}{push}: {len(placed)}/{len(results)} placed, "
               f"{sum(r['grasped'] for r in results)}/{len(results)} grasped")
         if placed:
