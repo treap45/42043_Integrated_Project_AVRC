@@ -243,7 +243,7 @@ class Display:
 
 def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", push=0.0,
               push_at="approach_start", display=None, viewer=None, fixed_gains=False, occluders="off",
-              occluder_margin=0.0) -> dict:
+              occluder_margin=0.0, cube_filter="cv") -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode,
                          schedule_period=0 if fixed_gains else 50)
@@ -275,7 +275,7 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", 
             viewer.sync()
 
     pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach, occluders=occluders,
-                           occluder_margin=occluder_margin)
+                           occluder_margin=occluder_margin, cube_filter=cube_filter)
     outcome = pick_place.run(timeout=timeout)
     result = monitor.result()
     failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
@@ -337,6 +337,8 @@ def main():
                         "more views, chosen by what the grasp decision lacks (src/active_vision/next_view.py)")
     p.add_argument("--occluder-margin", type=float, default=0.0, metavar="M",
                    help="extra clearance (m) the grasp must keep from the estimated occluders (default 0)")
+    p.add_argument("--cube-filter", default="cv", choices=["cv", "ct"],
+                   help="TRACK estimator: cv (constant-velocity CubeEKF, default) or ct (coordinated-turn CubeCTEKF)")
     p.add_argument("--fixed-gains", action="store_true",
                    help="comparison: joint models and gains from the observe pose only, no gain scheduling")
     args = p.parse_args()
@@ -364,7 +366,7 @@ def main():
         for seed in range(args.seed, args.seed + args.trials):
             r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
                           args.approach, args.push_cube, args.push_at, display, viewer, args.fixed_gains,
-                          args.occluders, args.occluder_margin)
+                          args.occluders, args.occluder_margin, args.cube_filter)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"

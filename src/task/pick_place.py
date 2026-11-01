@@ -4,6 +4,7 @@ import numpy as np
 
 from src.control.pbvs import TRANSIT_V_MAX, TRANSIT_W_MAX, joint_velocity, pbvs_twist, pose_error
 from src.active_vision.next_view import select_next_view
+from src.estimation.cube_ct_ekf import CubeCTEKF
 from src.estimation.cube_ekf import CubeEKF
 from src.perception.cube_pose import CUBE_HALF_HEIGHT, cube_measurement, estimate_cube
 from src.perception.occluders import estimate_occluders, fuse_occluders
@@ -32,7 +33,7 @@ TRACK_TIMEOUT = 30.0  # s, TRACK waits this long for the cube to stop, however l
 STOP_SPEED = 0.005  # m/s, estimated cube speed below which it may have stopped
 STOP_CHI2 = 5.99  # chi-square, 2 degrees of freedom, 95 %: velocity statistically indistinguishable from zero
 STOP_POS_TOL = 0.005  # m, TCP to its goal above the cube (horizontal)
-STOP_COUNT = 10  # consecutive vision updates (1 s) that must all pass the stop test
+STOP_COUNT = 20  # consecutive vision updates (2 s) that must all pass the stop test
 _MJ_FROM_CV = np.diag([1.0, -1.0, -1.0])  # MuJoCo camera frame <-> OpenCV camera frame
 
 
@@ -41,7 +42,7 @@ class PickPlace:
 
     def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None,
                  approach: str = "track", occluders: str = "off", occluder_margin: float = 0.0,
-                 max_extra_views: int = 2):
+                 max_extra_views: int = 2, cube_filter: str = "cv"):
         """on_step(pick_place) is called after every control period, for display and logging only.
         camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values.
         approach: "track" (default, see below); "open" descends straight from the pregrasp pose planned at OBSERVE
@@ -53,9 +54,12 @@ class PickPlace:
         occluders: "off" (default) ignores occluders; "conservative" estimates them in every captured frame and
         keeps only grasp yaws that clear them by occluder_margin, treating unseen table as occupied, and lifts
         and transports above them; "active" also takes up to max_extra_views more views (ACTIVE_VIEW), chosen
-        by src/active_vision/next_view.py, while no yaw is clear."""
+        by src/active_vision/next_view.py, while no yaw is clear.
+        cube_filter: the TRACK estimator, "cv" (CubeEKF, default) or "ct" (CubeCTEKF, with a turn rate)."""
         if approach not in ("pbvs_full", "pbvs", "open", "track"):
             raise ValueError("approach must be 'pbvs_full', 'pbvs', 'open' or 'track'")
+        if cube_filter not in ("cv", "ct"):
+            raise ValueError("cube_filter must be 'cv' or 'ct'")
         if occluders not in ("off", "conservative", "active"):
             raise ValueError("occluders must be 'off', 'conservative' or 'active'")
         self.sim = sim
@@ -77,6 +81,7 @@ class PickPlace:
         self.cube_ekf = None
         self.cube_estimate = None
         self.zone_estimate = None
+        self.cube_filter = cube_filter
         self.occluder_mode = occluders
         self.occluder_margin = float(occluder_margin)
         self.max_extra_views = int(max_extra_views)
@@ -478,7 +483,8 @@ class PickPlace:
         self.progress = 0.0
         start_time = self.elapsed
 
-        self.cube_ekf = CubeEKF(np.array([cube.pos[0], cube.pos[1], cube.yaw, 0.0, 0.0]), self.dt)
+        filter_class = CubeCTEKF if self.cube_filter == "ct" else CubeEKF
+        self.cube_ekf = filter_class(np.array([cube.pos[0], cube.pos[1], cube.yaw, 0.0, 0.0]), self.dt)
         z_cube = cube.pos[2]  # the cube slides on the table, so its height stays at the OBSERVE estimate
 
         def pregrasp_goal():
