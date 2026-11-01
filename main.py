@@ -242,7 +242,7 @@ class Display:
 # ---- trials ----------------------------------------------------------------------------------------
 
 def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", push=0.0,
-              push_at="approach_start", display=None, viewer=None, fixed_gains=False) -> dict:
+              push_at="approach_start", display=None, viewer=None, fixed_gains=False, cube_filter="cv") -> dict:
     sim.reset(seed, level)
     ctrl = ArmController(robot=robot, dt=sim.dt, y0=sim.read_joint_positions(), mode=mode,
                          schedule_period=0 if fixed_gains else 50)
@@ -273,7 +273,7 @@ def run_trial(sim, robot, camera, seed, level, mode, timeout, approach="track", 
                     time.sleep(lag)
             viewer.sync()
 
-    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach)
+    pick_place = PickPlace(sim, robot, ctrl, on_step=on_step, camera=camera, approach=approach, cube_filter=cube_filter)
     outcome = pick_place.run(timeout=timeout)
     result = monitor.result()
     failed_state = next((r["state"] for r in outcome["states"] if not r["ok"]), None)
@@ -328,6 +328,8 @@ def main():
     p.add_argument("--moving-cube", action=argparse.BooleanOptionalAction, default=True,
                    help="moving-cube task (default): from 0.5 s the cube slides in a straight line at 1-1.5 cm/s for "
                         "9-11 s, then stops, and the place zone is fixed; --no-moving-cube: static cube, random zone")
+    p.add_argument("--cube-filter", default="cv", choices=["cv", "ct"],
+                   help="TRACK estimator: cv (constant-velocity CubeEKF, default) or ct (coordinated-turn CubeCTEKF)")
     p.add_argument("--fixed-gains", action="store_true",
                    help="comparison: joint models and gains from the observe pose only, no gain scheduling")
     args = p.parse_args()
@@ -354,7 +356,8 @@ def main():
     try:
         for seed in range(args.seed, args.seed + args.trials):
             r = run_trial(sim, robot, camera, seed, args.level, args.mode, args.timeout,
-                          args.approach, args.push_cube, args.push_at, display, viewer, args.fixed_gains)
+                          args.approach, args.push_cube, args.push_at, display, viewer, args.fixed_gains,
+                          args.cube_filter)
             results.append(r)
             verdict = "SUCCESS" if r["placed"] else "FAIL"
             detail = "" if r["placed"] else f"  ({r['reason'] or 'success criteria not met'})"

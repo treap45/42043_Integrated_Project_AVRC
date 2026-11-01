@@ -3,6 +3,7 @@ import dataclasses
 import numpy as np
 
 from src.control.pbvs import TRANSIT_V_MAX, TRANSIT_W_MAX, joint_velocity, pbvs_twist, pose_error
+from src.estimation.cube_ct_ekf import CubeCTEKF
 from src.estimation.cube_ekf import CubeEKF
 from src.perception.cube_pose import cube_measurement, estimate_cube
 from src.perception.place_zone import estimate_zone
@@ -29,7 +30,7 @@ TRACK_TIMEOUT = 30.0  # s, TRACK waits this long for the cube to stop, however l
 STOP_SPEED = 0.005  # m/s, estimated cube speed below which it may have stopped
 STOP_CHI2 = 5.99  # chi-square, 2 degrees of freedom, 95 %: velocity statistically indistinguishable from zero
 STOP_POS_TOL = 0.005  # m, TCP to its goal above the cube (horizontal)
-STOP_COUNT = 10  # consecutive vision updates (1 s) that must all pass the stop test
+STOP_COUNT = 20  # consecutive vision updates (2 s) that must all pass the stop test
 _MJ_FROM_CV = np.diag([1.0, -1.0, -1.0])  # MuJoCo camera frame <-> OpenCV camera frame
 
 
@@ -37,7 +38,7 @@ class PickPlace:
     """Estimate-driven pick-and-place state machine."""
 
     def __init__(self, sim, robot, ctrl, on_step=None, camera: CameraModel | None = None,
-                 approach: str = "track"):
+                 approach: str = "track", cube_filter: str = "cv"):
         """on_step(pick_place) is called after every control period, for display and logging only.
         camera: intrinsics and hand-eye transform; defaults to the nominal (uncalibrated) values.
         approach: "track" (default, see below); "open" descends straight from the pregrasp pose planned at OBSERVE
@@ -45,9 +46,12 @@ class PickPlace:
         "pbvs" moves to that pregrasp pose, then servos the TCP on the cube before the final descent;
         "pbvs_full" also servos the move from OBSERVE to the pregrasp pose (TRANSIT) on the cube, meant for
         the occluded levels; "track" follows a moving cube above it with PBVS on the cube EKF and starts the
-        approach once the EKF says the cube has stopped (TRACK)."""
+        approach once the EKF says the cube has stopped (TRACK).
+        cube_filter: the TRACK estimator, "cv" (CubeEKF, default) or "ct" (CubeCTEKF, with a turn rate)."""
         if approach not in ("pbvs_full", "pbvs", "open", "track"):
             raise ValueError("approach must be 'pbvs_full', 'pbvs', 'open' or 'track'")
+        if cube_filter not in ("cv", "ct"):
+            raise ValueError("cube_filter must be 'cv' or 'ct'")
         self.sim = sim
         self.robot = robot
         self.ctrl = ctrl
@@ -67,6 +71,7 @@ class PickPlace:
         self.cube_ekf = None
         self.cube_estimate = None
         self.zone_estimate = None
+        self.cube_filter = cube_filter
 
     def _control_step(self, q_ref: np.ndarray, qd_ref: np.ndarray) -> None:
         y = self.sim.read_joint_positions()
@@ -426,7 +431,8 @@ class PickPlace:
         self.progress = 0.0
         start_time = self.elapsed
 
-        self.cube_ekf = CubeEKF(np.array([cube.pos[0], cube.pos[1], cube.yaw, 0.0, 0.0]), self.dt)
+        filter_class = CubeCTEKF if self.cube_filter == "ct" else CubeEKF
+        self.cube_ekf = filter_class(np.array([cube.pos[0], cube.pos[1], cube.yaw, 0.0, 0.0]), self.dt)
         z_cube = cube.pos[2]  # the cube slides on the table, so its height stays at the OBSERVE estimate
 
         def pregrasp_goal():
