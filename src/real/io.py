@@ -70,6 +70,7 @@ class SafetyLimits:
 
 class _VelocityIO:
     dt = DT
+    grasp_held = None  # result of the last close: True or False on the RG2, None when the gripper cannot tell
 
     def __init__(self, robot, limits: SafetyLimits, kp: float = KP):
         self.robot = robot
@@ -239,9 +240,10 @@ class RealIO(_VelocityIO):
             print(f"  [dry run] gripper {'close' if closure >= 0.5 else 'open'}")
             return
         if closure >= 0.5:
-            w, held = self.gripper.close_on(self.cube_side_mm)
-            print(f"  gripper closed at {w:.1f} mm, held={held}")
+            w, self.grasp_held = self.gripper.close_on(self.cube_side_mm)
+            print(f"  gripper closed at {w:.1f} mm, held={self.grasp_held}")
         else:
+            self.grasp_held = None
             print(f"  gripper open at {self.gripper.open():.1f} mm")
         self._deadline = time.monotonic()
 

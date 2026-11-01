@@ -5,9 +5,23 @@ constants (read at call time). apply() overwrites those constants for a run on t
 serves both without editing the simulation files; it is called once by scripts/run_real.py before anything runs.
 """
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from src.real.frames import SIM_BASE_HEIGHT
+
+CUBE_HSV_FILE = Path(__file__).resolve().parents[2] / "configs/real_cube_hsv.json"  # written by scripts/tune_hsv.py
+
+
+def load_cube_hsv(path: Path = CUBE_HSV_FILE) -> dict:
+    """Thresholds in the form segmentation.color_mask takes: h_ranges, s_min, v_min."""
+    data = json.loads(Path(path).read_text())
+    return {"h_ranges": tuple(tuple(r) for r in data["h_ranges"]), "s_min": data["s_min"], "v_min": data["v_min"]}
+
+
+def save_cube_hsv(hsv: dict, path: Path = CUBE_HSV_FILE) -> None:
+    Path(path).write_text(json.dumps(hsv, indent=2) + "\n")
 
 
 @dataclass

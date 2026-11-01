@@ -5,10 +5,14 @@ through src/real/: a fixed camera from the eye-to-hand calibration, joint-veloci
 of torques, the RG2 over XML-RPC, and safety limits on every command (src/real/io.py).
 
 Order of use on the robot (pendant in Remote, arm started where it does not hide the table from the camera):
+    python scripts/tune_hsv.py                               # cube colour thresholds, saved for the runs below
     python scripts/run_real.py --sim                         # first, in simulation (fixed scene camera)
     python scripts/run_real.py --dry-run --ip 192.168.0.191  # camera + cube + EKF live, nothing is sent
-    python scripts/run_real.py --mode track --hover-mm 150   # follow the cube in the air, no descent
-    python scripts/run_real.py --mode pick --place-xy -0.30 -0.12 --tcp-mm <measured>
+    python scripts/run_real.py --mode track --hover-mm 150 --tcp-mm <measured> --table-z-mm <measured>
+    python scripts/run_real.py --mode pick --place-xy -0.30 -0.12 --tcp-mm <measured> --table-z-mm <measured>
+
+Any run that moves the robot needs --tcp-mm and --table-z-mm: the safety limits rely on them, so a wrong value would
+not be caught. A grasp that closes on nothing ends the run with the arm stopped where it is.
 
 Coordinates on the command line (--place-xy, --table-z-mm) are in the RTDE base frame, as the pendant shows them.
 In the image window, q or Esc ends the run (the arm is stopped); Ctrl+C does the same from the terminal.
@@ -36,6 +40,7 @@ from src.real.robot import ROBOT_IP  # noqa: E402
 
 OUT_ROOT = Path(__file__).resolve().parents[1] / "results/real_runs"
 VIEW_PERIOD = 50  # control periods between display updates (10 Hz)
+TCP_RANGE_MM = (120.0, 300.0)  # a flange-to-fingertip value outside this is a typo or the wrong unit
 
 
 def rtde_xy_to_world(xy) -> np.ndarray:
@@ -99,8 +104,12 @@ def main():
     p.add_argument("--place-xy", type=float, nargs=2, default=None, metavar=("X", "Y"),
                    help="place position in the RTDE base frame (m)")
     p.add_argument("--cube-mm", type=float, default=None, help="cube edge (default 60, sim 50)")
-    p.add_argument("--table-z-mm", type=float, default=0.0, help="table surface z in the RTDE base frame")
-    p.add_argument("--tcp-mm", type=float, default=None, help="flange to RG2 fingertip centre (default: sim 156)")
+    p.add_argument("--table-z-mm", type=float, default=None,
+                   help="table surface z in the RTDE base frame; needed to move the robot (otherwise default 0)")
+    p.add_argument("--tcp-mm", type=float, default=None,
+                   help="flange to RG2 fingertip centre; needed to move the robot (otherwise default: sim 156)")
+    p.add_argument("--cube-hsv", default=None,
+                   help=f"cube colour thresholds from scripts/tune_hsv.py (default on the robot: {config.CUBE_HSV_FILE.name})")
     p.add_argument("--hover-mm", type=float, default=100.0, help="TCP above the grasp pose while tracking")
     p.add_argument("--v-max", type=float, default=0.08, help="TCP speed limit while tracking (m/s)")
     p.add_argument("--qd-max", type=float, default=QD_MAX, help="joint speed limit (rad/s)")
@@ -113,12 +122,31 @@ def main():
     p.add_argument("--no-window", action="store_true")
     args = p.parse_args()
 
+    if not args.sim and not args.dry_run:
+        missing = [flag for flag, value in (("--tcp-mm", args.tcp_mm), ("--table-z-mm", args.table_z_mm))
+                   if value is None]
+        if missing:
+            p.error(f"measure and pass {' and '.join(missing)} before moving the robot "
+                    "(the safety limits rely on them, so a wrong default would not be caught)")
+    if args.tcp_mm is not None and not TCP_RANGE_MM[0] <= args.tcp_mm <= TCP_RANGE_MM[1]:
+        p.error(f"--tcp-mm {args.tcp_mm} is outside {TCP_RANGE_MM} mm; it is in millimetres")
+
+    cube_hsv = None
+    if args.cube_hsv is not None:
+        cube_hsv = config.load_cube_hsv(args.cube_hsv)
+    elif not args.sim:
+        if config.CUBE_HSV_FILE.exists():
+            cube_hsv = config.load_cube_hsv(config.CUBE_HSV_FILE)
+            print(f"cube colour thresholds from {config.CUBE_HSV_FILE.name}: {cube_hsv}")
+        else:
+            print("warning: no thresholds tuned on the lab camera, using the simulation's; run scripts/tune_hsv.py")
+
     robot = UR3eModel()
-    table_z = SIM_BASE_HEIGHT + args.table_z_mm / 1000.0
+    table_z = SIM_BASE_HEIGHT + (args.table_z_mm or 0.0) / 1000.0
     cube_mm = args.cube_mm if args.cube_mm is not None else (50.0 if args.sim else 60.0)
     settings = config.RealSettings(cube_side=cube_mm / 1000.0, table_z=table_z,
                                    tcp_offset=None if args.tcp_mm is None else args.tcp_mm / 1000.0,
-                                   hover=args.hover_mm / 1000.0, track_v_max=args.v_max)
+                                   cube_hsv=cube_hsv, hover=args.hover_mm / 1000.0, track_v_max=args.v_max)
     changed = config.apply(settings, robot)
     print("settings: " + ", ".join(f"{k} {old} -> {new}" for k, (old, new) in changed.items() if old != new))
     limits = SafetyLimits(table_z=table_z, qd_max=args.qd_max)

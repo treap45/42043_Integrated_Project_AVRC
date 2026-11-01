@@ -161,6 +161,8 @@ class RealPickPlace(PickPlace):
             return self._fail("DESCEND failed")
         if not self._hold("GRASP", 0.5, gripper_closure=1.0):
             return self._fail("GRASP timed out")
+        if self.io.grasp_held is False:
+            return self._fail("the gripper closed on nothing; the arm stays at the grasp height")
         if not self._move_cartesian("LIFT", p_grasp, p_lift, rotation, 2.0):
             return self._fail("LIFT failed")
 
