@@ -11,6 +11,10 @@ The cube rests on the table, so its centre height is known (table + half the edg
 that height instead of the camera's, which with a fixed camera about 0.9 m away carries the calibration error
 (0.5 deg is about 8 mm); the camera's height is kept in z_offsets as a check of the calibration and table height.
 
+A cube pushed by hand can turn on its way, while the simulation's cube only translates. After TRACK the arm holds
+still, the cube's yaw is measured again, and if it changed the wrist turns at the hover height (ALIGN) before the
+approach, so the fingers meet the faces of the cube as it now lies.
+
 mode "track": find the cube, follow it until it stops, and hover there (no descent, gripper untouched).
 mode "pick":  the full task: track, approach, descend, grasp, lift, place at place_xy, release, retreat, return.
 """
@@ -29,6 +33,9 @@ from src.task.pick_place import PickPlace
 JOINT_V_PEAK = 0.25  # rad/s, peak joint speed of the joint-space moves (the simulation uses 0.5)
 FIND_CUBE_FRAMES = 30  # vision attempts at the start (3 s at 10 Hz)
 FIND_PERIOD = 50       # control periods between attempts
+YAW_FRAMES = 7         # frames looked at for the yaw after the stop
+YAW_MIN_FRAMES = 3     # valid frames needed to trust them over the EKF yaw
+ALIGN_MIN_DEG = 2.0    # a smaller change of grasp yaw is left alone
 
 
 class RealPickPlace(PickPlace):
@@ -43,6 +50,8 @@ class RealPickPlace(PickPlace):
         self.place_xy = None if place_xy is None else np.asarray(place_xy, dtype=float)
         self.q_start = io.xhat[:, 0].copy()
         self.z_offsets = []  # camera cube height minus the known one, per accepted estimate
+        self.yaw_at_stop = None  # rad, the cube's yaw measured after TRACK
+        self.align_deg = None    # deg, how far that moved the grasp yaw
 
     def _known_height(self, cube):
         z = grasp.TABLE_Z + cube_pose.CUBE_HALF_HEIGHT
@@ -78,6 +87,42 @@ class RealPickPlace(PickPlace):
         self.records.append({"state": "FIND", "ok": False, "elapsed": 0.0, "reason": "cube not detected"})
         return None
 
+    def _yaw_at_stop(self, ekf_yaw: float) -> float:
+        """The cube's yaw from a few frames with the arm still, or the EKF's if too few frames are usable.
+
+        A square's yaw repeats every 90 deg, so the frames are averaged on the angle multiplied by four."""
+        self.state = "MEASURE_YAW"
+        q_hold = self.ctrl.xhat[:, 0].copy()
+        yaws = []
+        for _ in range(YAW_FRAMES):
+            cube = self._capture_cube()
+            if cube is not None:
+                yaws.append(cube.yaw)
+            for _ in range(FIND_PERIOD):
+                self._control_step(q_hold, np.zeros(6))
+        if len(yaws) < YAW_MIN_FRAMES:
+            return ekf_yaw
+        return float(np.arctan2(np.mean(np.sin(4.0 * np.array(yaws))), np.mean(np.cos(4.0 * np.array(yaws)))) / 4.0)
+
+    def _realign_grasp(self, cube, psi: float):
+        """Choose the grasp yaw for the cube as it lies now and turn the wrist to it. Returns the yaw, or None."""
+        yaw = self._yaw_at_stop(cube.yaw)
+        self.yaw_at_stop = yaw
+        q_now = self.ctrl.xhat[:, 0].copy()
+        selected = self._select_grasp(cube.pos, yaw, q_now)
+        if selected is None:
+            return None
+        psi_new = selected[0]
+        change = abs(np.degrees(np.arctan2(np.sin(psi_new - psi), np.cos(psi_new - psi))))
+        self.align_deg = change
+        if change < ALIGN_MIN_DEG:
+            return psi
+        p_now, _ = self.robot.site_pose(q_now, "tcp")
+        q_align, ok = solve_ik(self.robot, p_now, grasp_poses(cube.pos, psi_new)["pregrasp"][1], q_now)
+        if not ok or not self._move_joint("ALIGN", q_align):
+            return None
+        return psi_new
+
     def run(self, timeout: float = 120.0) -> dict:
         self.timeout = float(timeout)
         if not self._hold("START", 0.2, q_hold=self.q_start):
@@ -91,7 +136,6 @@ class RealPickPlace(PickPlace):
         if selected is None:
             return self._fail("no feasible pregrasp IK solution")
         psi, _ = selected
-        rotation = grasp_poses(cube.pos, psi)["pregrasp"][1]
 
         cube = self._track(cube, psi)
         if cube is None:
@@ -100,6 +144,11 @@ class RealPickPlace(PickPlace):
         if self.mode == "track":
             self._hold("HOVER", 2.0)
             return {"ok": True, "elapsed": self.elapsed, "states": self.records, "reason": None}
+
+        psi = self._realign_grasp(cube, psi)
+        if psi is None:
+            return self._fail("no feasible grasp for the cube's yaw at the stop")
+        rotation = grasp_poses(cube.pos, psi)["pregrasp"][1]
 
         cube = self._approach_pbvs(cube, psi)
         if cube is None:

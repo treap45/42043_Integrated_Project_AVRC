@@ -38,6 +38,40 @@ OUTLIER_FACTOR = 3.0      # a view is flagged when its reprojection error is thi
 BOOTSTRAP = 50
 
 
+def fit(views, obj, K, dist):
+    """Closed-form Park solution and joint refinement; returns T_base_cam, T_ee_marker and per-view reprojection."""
+    Tb = [rtde_pose_to_T(v["tcp_pose"]) for v in views]
+    corners = [np.asarray(v["corners_px"]) for v in views]
+    Tc = []
+    for c in corners:
+        _, rvec, tvec = cv2.solvePnP(obj, c, K, dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+        Tc.append(make_T(cv2.Rodrigues(rvec)[0], tvec))
+    T0 = solve_T_base_cam(Tb, Tc, "Park")
+    T_em0 = evaluate(T0, Tb, Tc, corners, obj, K, dist).T_ee_marker
+    T_bc, T_em = refine(T0, T_em0, Tb, corners, obj, K, dist)
+    T_cb = invert_T(T_bc)
+    reproj = []
+    for T, c in zip(Tb, corners):
+        T_cm = T_cb @ T @ T_em
+        proj, _ = cv2.projectPoints(obj, cv2.Rodrigues(T_cm[:3, :3])[0], T_cm[:3, 3], K, dist)
+        reproj.append(float(np.sqrt(np.mean(np.sum((proj.reshape(-1, 2) - c) ** 2, axis=1)))))
+    return T_bc, T_em, np.array(reproj)
+
+
+def drop_outliers(views, obj, K, dist):
+    """Remove the worst view while it is an outlier (OUTLIER_FACTOR x median and over 1 px), up to a quarter."""
+    views = list(views)
+    allowed = len(views) // 4
+    for _ in range(allowed):
+        _, _, reproj = fit(views, obj, K, dist)
+        worst = int(np.argmax(reproj))
+        if reproj[worst] <= OUTLIER_FACTOR * np.median(reproj) or reproj[worst] <= 1.0:
+            break
+        print(f"auto-drop: view {views[worst]['index']} at {reproj[worst]:.2f} px (median {np.median(reproj):.2f})")
+        del views[worst]
+    return views
+
+
 def fk_check(views) -> str:
     """Compare the RTDE pose with FK of the controller-side model, both in the simulation world frame."""
     robot = UR3eModel()
@@ -58,6 +92,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("session", type=Path)
     p.add_argument("--drop", type=int, nargs="*", default=[], help="view indices to leave out")
+    p.add_argument("--auto-drop", action="store_true",
+                   help="leave out outlier views one at a time, worst first, at most a quarter of them")
     p.add_argument("--force", action="store_true", help="save even if the checks fail")
     p.add_argument("--out", type=Path, default=OUT)
     args = p.parse_args()
@@ -72,6 +108,9 @@ def main():
           + (f", dropped {args.drop}" if args.drop else ""))
     if len(views) < 3:
         sys.exit("need at least 3 views")
+
+    if args.auto_drop:
+        views = drop_outliers(views, obj, K, dist)
 
     T_base_ee = [rtde_pose_to_T(v["tcp_pose"]) for v in views]
     corners = [np.asarray(v["corners_px"]) for v in views]

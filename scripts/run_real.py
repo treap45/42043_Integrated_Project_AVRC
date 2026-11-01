@@ -167,6 +167,8 @@ def main():
     if pp.z_offsets:
         print(f"  camera cube height minus the known height: {1000 * np.median(pp.z_offsets):+.1f} mm median "
               f"({len(pp.z_offsets)} estimates); a few mm off means calibration or --table-z-mm is off")
+    if pp.align_deg is not None:
+        print(f"  grasp yaw changed by {pp.align_deg:.1f} deg after TRACK (cube yaw {np.degrees(pp.yaw_at_stop):+.1f} deg)")
     if pp.track_log:
         st = [e["status"] for e in pp.track_log]
         print(f"  TRACK: {len(st)} vision updates, {st.count('none')} without the cube, "

@@ -26,7 +26,8 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.real.aruco import DICTIONARY, MARKER_ID, detect, make_detector, marker_depth, marker_pose  # noqa: E402
+from src.real.aruco import (DICTIONARY, MARKER_ID, detect, make_detector, marker_depth, marker_pose,  # noqa: E402
+                            tilt_deg)
 from src.real.camera import D435i  # noqa: E402
 from src.real.frames import rotation_angle_deg  # noqa: E402
 from src.real.robot import ROBOT_IP, URReader  # noqa: E402
@@ -37,13 +38,6 @@ STILL_QD = 1e-3  # rad/s; above this on any joint the arm is still moving
 MIN_TILT_DEG = 20.0
 MIN_NEW_DEG = 15.0
 WINDOW = "eye-to-hand capture"
-
-
-def tilt_deg(obs) -> float:
-    """Angle between the marker normal and the ray from the camera to the marker centre."""
-    normal = obs.R_cam_marker[:, 2]
-    ray = obs.t_cam_marker / np.linalg.norm(obs.t_cam_marker)
-    return float(np.degrees(np.arccos(np.clip(abs(normal @ ray), 0.0, 1.0))))
 
 
 def draw(bgr, obs, K, dist, side, lines, colour):

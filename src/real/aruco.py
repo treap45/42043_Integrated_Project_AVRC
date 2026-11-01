@@ -42,6 +42,13 @@ class MarkerObservation:
     side_px: float            # mean edge length in the image
 
 
+def tilt_deg(obs: MarkerObservation) -> float:
+    """Angle between the marker normal and the ray from the camera to the marker centre."""
+    normal = obs.R_cam_marker[:, 2]
+    ray = obs.t_cam_marker / np.linalg.norm(obs.t_cam_marker)
+    return float(np.degrees(np.arccos(np.clip(abs(normal @ ray), 0.0, 1.0))))
+
+
 def detect(detector: cv2.aruco.ArucoDetector, rgb: np.ndarray, marker_id: int = MARKER_ID) -> np.ndarray | None:
     """(4, 2) corners of marker_id, or None. Expects an RGB image."""
     grey = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
