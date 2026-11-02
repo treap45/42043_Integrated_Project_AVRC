@@ -146,7 +146,8 @@ def main():
     cube_mm = args.cube_mm if args.cube_mm is not None else (50.0 if args.sim else 60.0)
     settings = config.RealSettings(cube_side=cube_mm / 1000.0, table_z=table_z,
                                    tcp_offset=None if args.tcp_mm is None else args.tcp_mm / 1000.0,
-                                   cube_hsv=cube_hsv, hover=args.hover_mm / 1000.0, track_v_max=args.v_max)
+                                   cube_hsv=cube_hsv, hover=args.hover_mm / 1000.0, track_v_max=args.v_max,
+                                   lab_estimation=not args.sim)
     changed = config.apply(settings, robot)
     print("settings: " + ", ".join(f"{k} {old} -> {new}" for k, (old, new) in changed.items() if old != new))
     limits = SafetyLimits(table_z=table_z, qd_max=args.qd_max)

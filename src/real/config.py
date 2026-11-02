@@ -32,6 +32,7 @@ class RealSettings:
     cube_hsv: dict | None = None             # overrides segmentation.CUBE_HSV (thresholds tuned on lab images)
     hover: float = 0.10                      # m, TCP above the grasp pose while tracking (grasp.HOVER)
     track_v_max: float = 0.08                # m/s, TCP speed limit while tracking (sim 0.15); quintic peak 75 % of it
+    lab_estimation: bool = True              # the cube estimate and EKF noise of src/real/cube_top.py; False keeps the sim's
     applied: dict = field(default_factory=dict)
 
 
@@ -62,6 +63,16 @@ def apply(settings: RealSettings, robot=None) -> dict:
             raise AttributeError(f"{module.__name__}.{name} no longer exists; update src/real/config.py")
         log[f"{module.__name__}.{name}"] = (getattr(module, name), value)
         setattr(module, name, value)
+
+    if settings.lab_estimation:
+        # The simulation's modules are unchanged; only the names PickPlace uses point elsewhere for this run.
+        from src.real import cube_top
+        log["cube top band"] = (0.005, cube_top.TOP_BAND)
+        log["cube size tolerance"] = (0.005, cube_top.SIZE_TOL)
+        log["cube EKF yaw sigma"] = (0.01, cube_top.YAW_SIGMA)
+        pick_place.estimate_cube = cube_top.estimate_cube
+        pick_place.cube_measurement = cube_top.cube_measurement
+        pick_place.CubeEKF = cube_top.LabCubeEKF
 
     if settings.tcp_offset is not None:
         if robot is None:

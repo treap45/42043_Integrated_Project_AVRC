@@ -29,7 +29,8 @@ def _clamp(x: float, lo_hi: tuple[float, float]) -> float:
 class RG2:
     def __init__(self, ip: str = ROBOT_IP, gripper_id: int = GRIPPER_ID, timeout_s: float = 5.0):
         self.gripper_id = gripper_id
-        self._proxy = xmlrpc.client.ServerProxy(f"http://{ip}:{PORT}", allow_none=True)
+        # The trailing slash matters: without a path xmlrpc.client posts to /RPC2, and the URCap answers only on /.
+        self._proxy = xmlrpc.client.ServerProxy(f"http://{ip}:{PORT}/", allow_none=True)
         self.timeout_s = timeout_s
 
     def width(self) -> float:

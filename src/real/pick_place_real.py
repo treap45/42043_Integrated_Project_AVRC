@@ -125,7 +125,9 @@ class RealPickPlace(PickPlace):
 
     def run(self, timeout: float = 120.0) -> dict:
         self.timeout = float(timeout)
-        if not self._hold("START", 0.2, q_hold=self.q_start):
+        # The RG2 stays at its last width between runs, and the simulation's gripper starts open.
+        gripper_closure = 0.0 if self.mode == "pick" else None
+        if not self._hold("START", 0.2, q_hold=self.q_start, gripper_closure=gripper_closure):
             return self._fail("timeout at start")
 
         cube = self._find_cube()
