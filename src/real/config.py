@@ -73,6 +73,9 @@ def apply(settings: RealSettings, robot=None) -> dict:
         pick_place.estimate_cube = cube_top.estimate_cube
         pick_place.cube_measurement = cube_top.cube_measurement
         pick_place.CubeEKF = cube_top.LabCubeEKF
+        # Set the cube down rather than drop it: the simulation releases it 3 mm above the table.
+        log["release gap"] = (grasp.RELEASE_GAP, 0.001)
+        grasp.RELEASE_GAP = 0.001
 
     if settings.tcp_offset is not None:
         if robot is None:

@@ -20,7 +20,8 @@ mode "pick":  the full task: track, approach, descend, grasp, lift, place at pla
 mode "static": a cube at rest, without vision once the arm has moved. With the arm above the cube its fingers get
               into the cube's mask and depth (on the lab camera 6 of 21 estimates pass, against 21 of 21 with the arm
               clear), so the cube is measured once from the start pose, grasp_offset is added, and the arm goes to the
-              pregrasp, straight down, grasps and places, with no further correction.
+              pregrasp, straight down, grasps and places, with no further correction. The wrist turns on the way to the
+              place so that the cube's faces end up square to the base axes.
 """
 
 import dataclasses
@@ -152,8 +153,21 @@ class RealPickPlace(PickPlace):
         return dataclasses.replace(cubes[-1], pos=np.median([c.pos for c in cubes], axis=0),
                                    yaw=float(np.arctan2(np.sin(yaws).mean(), np.cos(yaws).mean()) / 4.0))
 
-    def _grasp_and_place(self, cube, psi: float, move_s: float = 2.0) -> dict:
-        """From above the cube: down, grasp, lift, place, release, retreat, back to the start pose."""
+    def _square_place(self, q_seed: np.ndarray):
+        """The IK above the place for the axis-aligned grasp yaw needing the least joint motion: (yaw, q), or None."""
+        best = None
+        for k in range(4):
+            yaw = k * np.pi / 2.0
+            p_above, rotation = place_poses(self.place_xy, yaw)["above"]
+            q, ok = solve_ik(self.robot, p_above, rotation, q_seed)
+            if ok and (best is None or np.sum(np.abs(q - q_seed)) < np.sum(np.abs(best[1] - q_seed))):
+                best = (yaw, q)
+        return best
+
+    def _grasp_and_place(self, cube, psi: float, move_s: float = 2.0, square_place: bool = False) -> dict:
+        """From above the cube: down, grasp, lift, place, release, retreat, back to the start pose.
+
+        square_place: the fingers, and so the faces of the cube they hold, end up along the base axes."""
         poses = grasp_poses(cube.pos, psi)
         rotation = poses["grasp"][1]
         p_grasp, p_lift = poses["grasp"][0], poses["lift"][0]
@@ -168,12 +182,21 @@ class RealPickPlace(PickPlace):
         if not self._move_cartesian("LIFT", p_grasp, p_lift, rotation, move_s):
             return self._fail("LIFT failed")
 
-        poses = place_poses(self.place_xy, psi)
+        q_now = self.ctrl.xhat[:, 0].copy()
+        if square_place:
+            selected = self._square_place(q_now)
+            if selected is None:
+                return self._fail("no axis-aligned placement IK solution")
+            psi_place, q_above = selected
+        else:
+            psi_place = psi
+            q_above, ok = solve_ik(self.robot, place_poses(self.place_xy, psi)["above"][0],
+                                   place_poses(self.place_xy, psi)["above"][1], q_now)
+            if not ok:
+                return self._fail("placement-above IK did not converge")
+        poses = place_poses(self.place_xy, psi_place)
         p_above, place_rotation = poses["above"]
         p_place, p_retreat = poses["place"][0], poses["retreat"][0]
-        q_above, ok = solve_ik(self.robot, p_above, place_rotation, self.ctrl.xhat[:, 0].copy())
-        if not ok:
-            return self._fail("placement-above IK did not converge")
         if not self._move_joint("TRANSPORT", q_above):
             return self._fail("TRANSPORT failed")
         if not self._move_cartesian("PLACE", p_above, p_place, place_rotation, move_s):
@@ -199,7 +222,7 @@ class RealPickPlace(PickPlace):
         psi, q_pregrasp = selected
         if not self._move_joint("PREGRASP", q_pregrasp):
             return self._fail("PREGRASP failed")
-        return self._grasp_and_place(target, psi, STATIC_MOVE_S)
+        return self._grasp_and_place(target, psi, STATIC_MOVE_S, square_place=True)
 
     def run(self, timeout: float = 120.0) -> dict:
         self.timeout = float(timeout)

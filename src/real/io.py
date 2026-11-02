@@ -23,6 +23,7 @@ KP = 4.0               # 1/s, position correction on top of the velocity feed-fo
 DT = 0.002             # s, 500 Hz like the simulation (GOAL_UPDATE_PERIOD = 50 gives 10 Hz vision)
 QD_MAX = 0.35          # rad/s, every joint; the lab examples use 0.02-0.05, PBVS asks up to about 0.3 when tracking
 ACCELERATION = 1.5     # rad/s^2, speedJ acceleration
+RELEASE_MARGIN_MM = 4.0  # mm, beyond the cube width: the first opening step when letting go
 STALE_FRAME_S = 0.3    # a camera frame older than this is counted as stale
 DEPTH_FRAMES = 4       # depth frames averaged per measurement (fixed camera; 0.13 s at 30 fps)
 SIM_DEPTH_K = 0.004    # sim depth noise k_axial for the fixed camera (the simulation default 0.01 is the D435 spec
@@ -243,6 +244,9 @@ class RealIO(_VelocityIO):
             w, self.grasp_held = self.gripper.close_on(self.cube_side_mm)
             print(f"  gripper closed at {w:.1f} mm, held={self.grasp_held}")
         else:
+            if self.grasp_held:
+                # Let go first: the fingertips rise as they open, and while still gripping would lift the cube with them.
+                self.gripper.grip(self.cube_side_mm + RELEASE_MARGIN_MM)
             self.grasp_held = None
             print(f"  gripper open at {self.gripper.open():.1f} mm")
         self._deadline = time.monotonic()
