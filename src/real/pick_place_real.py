@@ -17,6 +17,10 @@ approach, so the fingers meet the faces of the cube as it now lies.
 
 mode "track": find the cube, follow it until it stops, and hover there (no descent, gripper untouched).
 mode "pick":  the full task: track, approach, descend, grasp, lift, place at place_xy, release, retreat, return.
+mode "static": a cube at rest, without vision once the arm has moved. With the arm above the cube its fingers get
+              into the cube's mask and depth (on the lab camera 6 of 21 estimates pass, against 21 of 21 with the arm
+              clear), so the cube is measured once from the start pose, grasp_offset is added, and the arm goes to the
+              pregrasp, straight down, grasps and places, with no further correction.
 """
 
 import dataclasses
@@ -36,14 +40,17 @@ FIND_PERIOD = 50       # control periods between attempts
 YAW_FRAMES = 7         # frames looked at for the yaw after the stop
 YAW_MIN_FRAMES = 3     # valid frames needed to trust them over the EKF yaw
 ALIGN_MIN_DEG = 2.0    # a smaller change of grasp yaw is left alone
+STATIC_FRAMES = 21     # frames looked at for the cube in mode "static"
+STATIC_MIN_FRAMES = 18 # valid frames needed: on the lab camera 21 of 21 with the arm clear, 6 of 21 with it above the cube
+STATIC_MOVE_S = 6.0    # s, each vertical move in mode "static" (17 mm/s over the 100 mm hover; the simulation uses 2 s)
 
 
 class RealPickPlace(PickPlace):
-    def __init__(self, io, robot, camera, mode: str = "track", place_xy=None, on_step=None):
-        if mode not in ("track", "pick"):
-            raise ValueError("mode must be 'track' or 'pick'")
-        if mode == "pick" and place_xy is None:
-            raise ValueError("mode 'pick' needs place_xy")
+    def __init__(self, io, robot, camera, mode: str = "track", place_xy=None, on_step=None, grasp_offset=(0.0, 0.0)):
+        if mode not in ("track", "pick", "static"):
+            raise ValueError("mode must be 'track', 'pick' or 'static'")
+        if mode in ("pick", "static") and place_xy is None:
+            raise ValueError(f"mode '{mode}' needs place_xy")
         super().__init__(io, robot, io, on_step=on_step, camera=camera, approach="track")
         self.io = io
         self.mode = mode
@@ -52,6 +59,8 @@ class RealPickPlace(PickPlace):
         self.z_offsets = []  # camera cube height minus the known one, per accepted estimate
         self.yaw_at_stop = None  # rad, the cube's yaw measured after TRACK
         self.align_deg = None    # deg, how far that moved the grasp yaw
+        self.grasp_offset = np.array([*grasp_offset, 0.0], dtype=float)  # m, world, added to the measured cube (static)
+        self.static_cube = None  # the cube measured in mode "static", before the offset
 
     def _known_height(self, cube):
         z = grasp.TABLE_Z + cube_pose.CUBE_HALF_HEIGHT
@@ -123,12 +132,83 @@ class RealPickPlace(PickPlace):
             return None
         return psi_new
 
+    def _measure_static(self):
+        """The cube from several frames with the arm still: median position, yaw averaged on four times the angle."""
+        self.state = "MEASURE"
+        q_hold = self.ctrl.xhat[:, 0].copy()
+        cubes = []
+        for _ in range(STATIC_FRAMES):
+            cube = self._capture_cube()
+            if cube is not None:
+                cubes.append(cube)
+            for _ in range(FIND_PERIOD):
+                self._control_step(q_hold, np.zeros(6))
+        ok = len(cubes) >= STATIC_MIN_FRAMES
+        self.records.append({"state": "MEASURE", "ok": ok, "elapsed": 0.0,
+                             "reason": None if ok else f"{len(cubes)} of {STATIC_FRAMES} frames"})
+        if not ok:
+            return None
+        yaws = 4.0 * np.array([c.yaw for c in cubes])
+        return dataclasses.replace(cubes[-1], pos=np.median([c.pos for c in cubes], axis=0),
+                                   yaw=float(np.arctan2(np.sin(yaws).mean(), np.cos(yaws).mean()) / 4.0))
+
+    def _grasp_and_place(self, cube, psi: float, move_s: float = 2.0) -> dict:
+        """From above the cube: down, grasp, lift, place, release, retreat, back to the start pose."""
+        poses = grasp_poses(cube.pos, psi)
+        rotation = poses["grasp"][1]
+        p_grasp, p_lift = poses["grasp"][0], poses["lift"][0]
+        p_pre, _ = self.robot.site_pose(self.ctrl.xhat[:, 0], "tcp")
+
+        if not self._move_cartesian("DESCEND", p_pre, p_grasp, rotation, move_s):
+            return self._fail("DESCEND failed")
+        if not self._hold("GRASP", 0.5, gripper_closure=1.0):
+            return self._fail("GRASP timed out")
+        if self.io.grasp_held is False:
+            return self._fail("the gripper closed on nothing; the arm stays at the grasp height")
+        if not self._move_cartesian("LIFT", p_grasp, p_lift, rotation, move_s):
+            return self._fail("LIFT failed")
+
+        poses = place_poses(self.place_xy, psi)
+        p_above, place_rotation = poses["above"]
+        p_place, p_retreat = poses["place"][0], poses["retreat"][0]
+        q_above, ok = solve_ik(self.robot, p_above, place_rotation, self.ctrl.xhat[:, 0].copy())
+        if not ok:
+            return self._fail("placement-above IK did not converge")
+        if not self._move_joint("TRANSPORT", q_above):
+            return self._fail("TRANSPORT failed")
+        if not self._move_cartesian("PLACE", p_above, p_place, place_rotation, move_s):
+            return self._fail("PLACE failed")
+        if not self._hold("RELEASE", 0.5, gripper_closure=0.0):
+            return self._fail("RELEASE timed out")
+        if not self._move_cartesian("RETREAT", p_place, p_retreat, place_rotation, move_s):
+            return self._fail("RETREAT failed")
+        if not self._move_joint("RETURN", self.q_start):
+            return self._fail("return to the start pose failed")
+        return {"ok": True, "elapsed": self.elapsed, "states": self.records, "reason": None}
+
+    def _run_static(self) -> dict:
+        cube = self._measure_static()
+        if cube is None:
+            return self._fail("the cube was not measured in enough frames; is the arm in the camera's view of it?")
+        self.static_cube = cube
+        q_now = self.ctrl.xhat[:, 0].copy()
+        target = dataclasses.replace(cube, pos=cube.pos + self.grasp_offset)
+        selected = self._select_grasp(target.pos, target.yaw, q_now)
+        if selected is None:
+            return self._fail("no feasible pregrasp IK solution")
+        psi, q_pregrasp = selected
+        if not self._move_joint("PREGRASP", q_pregrasp):
+            return self._fail("PREGRASP failed")
+        return self._grasp_and_place(target, psi, STATIC_MOVE_S)
+
     def run(self, timeout: float = 120.0) -> dict:
         self.timeout = float(timeout)
         # The RG2 stays at its last width between runs, and the simulation's gripper starts open.
-        gripper_closure = 0.0 if self.mode == "pick" else None
+        gripper_closure = 0.0 if self.mode in ("pick", "static") else None
         if not self._hold("START", 0.2, q_hold=self.q_start, gripper_closure=gripper_closure):
             return self._fail("timeout at start")
+        if self.mode == "static":
+            return self._run_static()
 
         cube = self._find_cube()
         if cube is None:
@@ -150,38 +230,7 @@ class RealPickPlace(PickPlace):
         psi = self._realign_grasp(cube, psi)
         if psi is None:
             return self._fail("no feasible grasp for the cube's yaw at the stop")
-        rotation = grasp_poses(cube.pos, psi)["pregrasp"][1]
-
         cube = self._approach_pbvs(cube, psi)
         if cube is None:
             return self._fail("APPROACH failed")
-        poses = grasp_poses(cube.pos, psi)
-        p_grasp, p_lift = poses["grasp"][0], poses["lift"][0]
-        p_pre, _ = self.robot.site_pose(self.ctrl.xhat[:, 0], "tcp")
-
-        if not self._move_cartesian("DESCEND", p_pre, p_grasp, rotation, 2.0):
-            return self._fail("DESCEND failed")
-        if not self._hold("GRASP", 0.5, gripper_closure=1.0):
-            return self._fail("GRASP timed out")
-        if self.io.grasp_held is False:
-            return self._fail("the gripper closed on nothing; the arm stays at the grasp height")
-        if not self._move_cartesian("LIFT", p_grasp, p_lift, rotation, 2.0):
-            return self._fail("LIFT failed")
-
-        poses = place_poses(self.place_xy, psi)
-        p_above, place_rotation = poses["above"]
-        p_place, p_retreat = poses["place"][0], poses["retreat"][0]
-        q_above, ok = solve_ik(self.robot, p_above, place_rotation, self.ctrl.xhat[:, 0].copy())
-        if not ok:
-            return self._fail("placement-above IK did not converge")
-        if not self._move_joint("TRANSPORT", q_above):
-            return self._fail("TRANSPORT failed")
-        if not self._move_cartesian("PLACE", p_above, p_place, place_rotation, 2.0):
-            return self._fail("PLACE failed")
-        if not self._hold("RELEASE", 0.5, gripper_closure=0.0):
-            return self._fail("RELEASE timed out")
-        if not self._move_cartesian("RETREAT", p_place, p_retreat, place_rotation, 2.0):
-            return self._fail("RETREAT failed")
-        if not self._move_joint("RETURN", self.q_start):
-            return self._fail("return to the start pose failed")
-        return {"ok": True, "elapsed": self.elapsed, "states": self.records, "reason": None}
+        return self._grasp_and_place(cube, psi)

@@ -9,7 +9,12 @@ Order of use on the robot (pendant in Remote, arm started where it does not hide
     python scripts/run_real.py --sim                         # first, in simulation (fixed scene camera)
     python scripts/run_real.py --dry-run --ip 192.168.0.191  # camera + cube + EKF live, nothing is sent
     python scripts/run_real.py --mode track --hover-mm 150 --tcp-mm <measured> --table-z-mm <measured>
-    python scripts/run_real.py --mode pick --place-xy -0.30 -0.12 --tcp-mm <measured> --table-z-mm <measured>
+    python scripts/run_real.py --mode pick --place-xy -0.13 -0.28 --tcp-mm <measured> --table-z-mm <measured>
+    python scripts/run_real.py --mode static --place-xy -0.13 -0.28 --tcp-mm 225 --table-z-mm 0   # a cube at rest
+
+--mode static measures the cube once with the arm out of the camera's view of it (the lab's observe poses), adds --grasp-offset-mm,
+and then moves without vision. --tcp-mm there is the working value: flange z at the grasp minus 25 mm (the TCP is 5 mm
+below the centre of the 60 mm cube), so a grasp found by hand at flange z = 250 mm gives 225.
 
 Any run that moves the robot needs --tcp-mm and --table-z-mm: the safety limits rely on them, so a wrong value would
 not be caught. A grasp that closes on nothing ends the run with the arm stopped where it is.
@@ -100,7 +105,7 @@ def main():
     p.add_argument("--sim", action="store_true", help="run against the simulation (scene camera fixed_cam)")
     p.add_argument("--ip", default=ROBOT_IP)
     p.add_argument("--dry-run", action="store_true", help="real camera and robot state, no motion commands")
-    p.add_argument("--mode", choices=["track", "pick"], default="track")
+    p.add_argument("--mode", choices=["track", "pick", "static"], default="track")
     p.add_argument("--place-xy", type=float, nargs=2, default=None, metavar=("X", "Y"),
                    help="place position in the RTDE base frame (m)")
     p.add_argument("--cube-mm", type=float, default=None, help="cube edge (default 60, sim 50)")
@@ -119,6 +124,9 @@ def main():
     p.add_argument("--no-camera-noise", action="store_true", help="sim only")
     p.add_argument("--depth-k", type=float, default=SIM_DEPTH_K, help="sim only: depth noise k_axial (1/m)")
     p.add_argument("--depth-frames", type=int, default=DEPTH_FRAMES, help="depth frames averaged per measurement")
+    p.add_argument("--grasp-offset-mm", type=float, nargs=2, default=None, metavar=("X", "Y"),
+                   help="--mode static: added to the measured cube, RTDE base frame (default: robot 9 -4, found by hand "
+                        "on 2026-11-02; sim 0 0)")
     p.add_argument("--no-window", action="store_true")
     args = p.parse_args()
 
@@ -168,7 +176,10 @@ def main():
     print(f"camera: {camera.source}, at {np.round(camera.p_world_cam, 3)} m (world)")
 
     viewer = Viewer(show=not args.no_window)
-    pp = RealPickPlace(io, robot, camera, mode=args.mode, place_xy=place_world, on_step=viewer)
+    offset_rtde = args.grasp_offset_mm or ([0.0, 0.0] if args.sim else [9.0, -4.0])
+    grasp_offset = sim_world_from_rtde()[:2, :2] @ (np.array(offset_rtde) / 1000.0)
+    pp = RealPickPlace(io, robot, camera, mode=args.mode, place_xy=place_world, on_step=viewer,
+                       grasp_offset=grasp_offset)
     out = OUT_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
     outcome, error = None, None
     wall = time.perf_counter()
@@ -196,6 +207,10 @@ def main():
     if pp.z_offsets:
         print(f"  camera cube height minus the known height: {1000 * np.median(pp.z_offsets):+.1f} mm median "
               f"({len(pp.z_offsets)} estimates); a few mm off means calibration or --table-z-mm is off")
+    if pp.static_cube is not None:
+        c = np.linalg.inv(sim_world_from_rtde()) @ np.array([*pp.static_cube.pos, 1.0])
+        print(f"  cube measured at ({c[0]:.4f}, {c[1]:.4f}) m RTDE base, yaw {np.degrees(pp.static_cube.yaw):+.1f} deg, "
+              f"grasp offset {offset_rtde} mm")
     if pp.align_deg is not None:
         print(f"  grasp yaw changed by {pp.align_deg:.1f} deg after TRACK (cube yaw {np.degrees(pp.yaw_at_stop):+.1f} deg)")
     if pp.track_log:
