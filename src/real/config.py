@@ -33,6 +33,8 @@ class RealSettings:
     hover: float = 0.10                      # m, TCP above the grasp pose while tracking (grasp.HOVER)
     track_v_max: float = 0.08                # m/s, TCP speed limit while tracking (sim 0.15); quintic peak 75 % of it
     stop_count: int = 40                     # vision updates (4 s at 10 Hz) the cube must look stopped (sim 20)
+    stop_speed: float = 0.008                # m/s, below it the cube may have stopped (sim 0.005); at rest on the lab camera
+                                             # the EKF speed reaches 9 mm/s, and 5 mm/s never held for the 4 s
     track_timeout: float = 60.0              # s, TRACK (sim 30)
     lab_estimation: bool = True              # the cube estimate and EKF noise of src/real/cube_top.py; False keeps the sim's
     applied: dict = field(default_factory=dict)
@@ -81,6 +83,8 @@ def apply(settings: RealSettings, robot=None) -> dict:
         # A cube pushed by hand can pause on its way, and the push can take longer than the simulation's motion.
         log["stop window (vision updates)"] = (pick_place.STOP_COUNT, settings.stop_count)
         log["TRACK timeout"] = (pick_place.TRACK_TIMEOUT, settings.track_timeout)
+        log["stop speed"] = (pick_place.STOP_SPEED, settings.stop_speed)
+        pick_place.STOP_SPEED = settings.stop_speed
         pick_place.STOP_COUNT = settings.stop_count
         pick_place.TRACK_TIMEOUT = settings.track_timeout
 
