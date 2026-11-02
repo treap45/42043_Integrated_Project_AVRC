@@ -10,6 +10,8 @@ computations as in cube_pose.py; src/real/config.py puts them in place of the si
 LabCubeEKF is the cube EKF with the yaw noise measured on the lab camera, which is larger than in the simulation.
 """
 
+import collections
+
 import cv2
 import numpy as np
 
@@ -19,6 +21,9 @@ from src.perception import cube_pose
 
 TOP_BAND = 0.010  # m, either side of the known top-face height
 YAW_SIGMA = 0.03  # rad, measurement noise of the cube yaw (simulation 0.01; a static cube on the lab camera: 0.026)
+camera = None     # FixedCameraModel, set by RealPickPlace
+counts = collections.Counter()  # why estimates failed, for the run's log
+sizes = []        # mm, the fitted tops that failed the size check
 SIZE_TOL = 0.008  # m, of the fitted top against the cube edge (cube_pose.py: 0.005); the 60 mm top measures 53-59 mm
 
 
@@ -28,10 +33,12 @@ def estimate_cube(points_w: np.ndarray, min_top_points: int = 200) -> cube_pose.
         raise ValueError("points_w must have shape (N, 3)")
     points_w = points_w[np.all(np.isfinite(points_w), axis=1)]
     if len(points_w) < min_top_points:
+        counts["too few points"] += 1
         return cube_pose._invalid_estimate()
 
     top = points_w[np.abs(points_w[:, 2] - cube_ekf.Z_TOP) <= TOP_BAND]
     if len(top) < min_top_points:
+        counts["too few top-face points"] += 1
         return cube_pose._invalid_estimate()
 
     xy = top[:, :2]
@@ -41,36 +48,35 @@ def estimate_cube(points_w: np.ndarray, min_top_points: int = 200) -> cube_pose.
     lo, hi = np.percentile(local, [cube_pose.EDGE_TRIM_PCT, 100.0 - cube_pose.EDGE_TRIM_PCT], axis=0)
     inliers = np.all((local >= lo) & (local <= hi), axis=1)
     if np.count_nonzero(inliers) < min_top_points:
+        counts["too few top-face points"] += 1
         return cube_pose._invalid_estimate()
 
     (cx, cy), (width, height), angle_deg = cv2.minAreaRect(xy[inliers].astype(np.float32))
     yaw = ((np.deg2rad(angle_deg) + np.pi / 4.0) % (np.pi / 2.0)) - np.pi / 4.0
     center_z = float(np.mean(top[:, 2]) - cube_pose.CUBE_HALF_HEIGHT)
     size_ok = abs(width - cube_pose.CUBE_SIDE) <= SIZE_TOL and abs(height - cube_pose.CUBE_SIDE) <= SIZE_TOL
+    counts["ok" if size_ok else "size"] += 1
+    if not size_ok:
+        sizes.append((round(1000.0 * float(width), 1), round(1000.0 * float(height), 1)))
     return cube_pose.CubeEstimate(pos=np.array([cx, cy, center_z], dtype=float), yaw=float(yaw), n_points=len(top),
                                   top_size=(float(width), float(height)), ok=bool(size_ok))
 
 
 def cube_measurement(points_cv, points_w, cube, K_cam):
-    """[u, v, Z, yaw] from matched OpenCV and world point clouds, or None."""
+    """[u, v, Z, yaw] of the centre of the fitted top face, or None.
+
+    cube_pose.py takes the mean of the top-face points. On the lab camera those lack the near edge and include some of
+    the side face, so the mean sits 5 px and 5 mm from the rectangle's centre, whichever the position, and the EKF
+    rejects most measurements of a cube at rest (a bias of NIS 140 against a gate of 13). The centre is projected instead,
+    through the camera pose set in `camera` by RealPickPlace, at the known height the EKF's model uses.
+    """
     if cube is None or not cube.ok:
         return None
-    points_cv = np.asarray(points_cv, dtype=float)
-    points_w = np.asarray(points_w, dtype=float)
-    if points_cv.ndim != 2 or points_cv.shape[1] != 3 or points_w.shape != points_cv.shape:
-        raise ValueError("points_cv and points_w must both have shape (N, 3)")
-    valid = np.all(np.isfinite(points_cv), axis=1) & np.all(np.isfinite(points_w), axis=1)
-    points_cv, points_w = points_cv[valid], points_w[valid]
-    if len(points_cv) == 0:
+    p_cv = camera.R_world_cv.T @ (np.array([cube.pos[0], cube.pos[1], cube_ekf.Z_TOP]) - camera.p_world_cam)
+    if p_cv[2] <= 0.0:
         return None
-
-    top = np.abs(points_w[:, 2] - cube_ekf.Z_TOP) <= TOP_BAND
-    if np.count_nonzero(top) < 20:
-        return None
-    X, Y, Z = np.mean(points_cv[top], axis=0)
-    if Z <= 0.0:
-        return None
-    return np.array([K_cam[0, 0] * X / Z + K_cam[0, 2], K_cam[1, 1] * Y / Z + K_cam[1, 2], Z, cube.yaw], dtype=float)
+    return np.array([K_cam[0, 0] * p_cv[0] / p_cv[2] + K_cam[0, 2], K_cam[1, 1] * p_cv[1] / p_cv[2] + K_cam[1, 2],
+                     p_cv[2], cube.yaw], dtype=float)
 
 
 class LabCubeEKF(CubeEKF):

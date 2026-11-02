@@ -12,6 +12,8 @@ Order of use on the robot (pendant in Remote, arm started where it does not hide
     python scripts/run_real.py --mode pick --place-xy -0.13 -0.28 --tcp-mm <measured> --table-z-mm <measured>
     python scripts/run_real.py --mode static --place-xy -0.13 -0.28 --tcp-mm 225 --table-z-mm 0   # a cube at rest
 
+--mode moving follows the cube from above with PBVS until it stops, measures it from there, then continues as
+--mode static (same --tcp-mm; use --hover-mm 150).
 --mode static measures the cube once with the arm out of the camera's view of it (the lab's observe poses), adds --grasp-offset-mm,
 and then moves without vision. --tcp-mm there is the working value: flange z at the grasp minus 25 mm (the TCP is 5 mm
 below the centre of the 60 mm cube), so a grasp found by hand at flange z = 250 mm gives 225.
@@ -36,7 +38,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.model.ur3e import UR3eModel  # noqa: E402
 from src.perception.segmentation import color_mask, largest_component  # noqa: E402
-from src.real import config  # noqa: E402
+from src.real import config, cube_top  # noqa: E402
 from src.real.fixed_camera import FixedCameraModel  # noqa: E402
 from src.real.frames import SIM_BASE_HEIGHT, sim_world_from_rtde  # noqa: E402
 from src.real.io import DEPTH_FRAMES, QD_MAX, SIM_DEPTH_K, RealIO, SafetyLimits, SafetyStop, SimIO  # noqa: E402
@@ -105,7 +107,7 @@ def main():
     p.add_argument("--sim", action="store_true", help="run against the simulation (scene camera fixed_cam)")
     p.add_argument("--ip", default=ROBOT_IP)
     p.add_argument("--dry-run", action="store_true", help="real camera and robot state, no motion commands")
-    p.add_argument("--mode", choices=["track", "pick", "static"], default="track")
+    p.add_argument("--mode", choices=["track", "pick", "static", "moving"], default="track")
     p.add_argument("--place-xy", type=float, nargs=2, default=None, metavar=("X", "Y"),
                    help="place position in the RTDE base frame (m)")
     p.add_argument("--cube-mm", type=float, default=None, help="cube edge (default 60, sim 50)")
@@ -125,7 +127,7 @@ def main():
     p.add_argument("--depth-k", type=float, default=SIM_DEPTH_K, help="sim only: depth noise k_axial (1/m)")
     p.add_argument("--depth-frames", type=int, default=DEPTH_FRAMES, help="depth frames averaged per measurement")
     p.add_argument("--grasp-offset-mm", type=float, nargs=2, default=None, metavar=("X", "Y"),
-                   help="--mode static: added to the measured cube, RTDE base frame (default: robot 9 -4, found by hand "
+                   help="--mode static or moving: added to the measured cube, RTDE base frame (default: robot 9 -4, found by hand "
                         "on 2026-11-02; sim 0 0)")
     p.add_argument("--no-window", action="store_true")
     args = p.parse_args()
@@ -229,11 +231,20 @@ def main():
               + (", still held" if held else ""))
     if not args.sim:
         print(f"  control overruns: {io.overruns}, stale camera frames: {io.stale_frames}")
+    if cube_top.counts:
+        print(f"  cube estimates: {dict(cube_top.counts)}"
+              + (f"; failed sizes, last ones: {cube_top.sizes[-5:]} mm" if cube_top.sizes else ""))
     out.mkdir(parents=True, exist_ok=True)
+    for i, (rgb, depth, size) in enumerate(pp.odd_frames):
+        cv2.imwrite(str(out / f"odd_frame_{i}_{size[0]:.0f}x{size[1]:.0f}.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        np.save(out / f"odd_depth_{i}.npy", depth)
+    if pp.failed_frame is not None:
+        cv2.imwrite(str(out / "failed_frame.png"), cv2.cvtColor(pp.failed_frame[0], cv2.COLOR_RGB2BGR))
+        np.save(out / "failed_depth.npy", pp.failed_frame[1])
     (out / "run.json").write_text(json.dumps({
         "args": vars(args), "error": error, "outcome": None if outcome is None else
         {k: v for k, v in outcome.items() if k != "states"}, "records": pp.records, "track_log": pp.track_log,
-        "samples": viewer.log, "settings": {k: list(v) for k, v in changed.items()},
+        "samples": viewer.log, "estimates": dict(cube_top.counts), "failed_sizes": cube_top.sizes[-200:], "settings": {k: list(v) for k, v in changed.items()},
     }, indent=1, default=float))
     print(f"  log: {out}/run.json")
     sys.exit(0 if outcome is not None and outcome["ok"] and not error else 1)

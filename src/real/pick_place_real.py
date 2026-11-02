@@ -22,6 +22,8 @@ mode "static": a cube at rest, without vision once the arm has moved. With the a
               clear), so the cube is measured once from the start pose, grasp_offset is added, and the arm goes to the
               pregrasp, straight down, grasps and places, with no further correction. The wrist turns on the way to the
               place so that the cube's faces end up square to the base axes.
+mode "moving": follow a moving cube from above it with PBVS (TRACK) until it stops, measure it from there (15 cm above
+              it the arm does not hide it: 21 of 21 frames on the lab camera), then as in mode "static".
 """
 
 import dataclasses
@@ -33,6 +35,7 @@ from src.planning import grasp
 from src.planning.grasp import grasp_poses, place_poses
 from src.planning.ik import solve_ik
 from src.planning.trajectory import QuinticJoint
+from src.real import cube_top
 from src.task.pick_place import PickPlace
 
 JOINT_V_PEAK = 0.25  # rad/s, peak joint speed of the joint-space moves (the simulation uses 0.5)
@@ -43,16 +46,20 @@ YAW_MIN_FRAMES = 3     # valid frames needed to trust them over the EKF yaw
 ALIGN_MIN_DEG = 2.0    # a smaller change of grasp yaw is left alone
 STATIC_FRAMES = 21     # frames looked at for the cube in mode "static"
 STATIC_MIN_FRAMES = 18 # valid frames needed: on the lab camera 21 of 21 with the arm clear, 6 of 21 with it above the cube
+TRACK_SIZE_TOL = 0.020 # m, of the fitted top while following: a rough top still locates the cube, and the EKF's gate
+                       # rejects a bad one; rejecting it here left the arm following the prediction for seconds
+ODD_FRAMES = 5         # frames kept for the run's log when the fitted top is outside cube_top.SIZE_TOL while following
 STATIC_MOVE_S = 6.0    # s, each vertical move in mode "static" (17 mm/s over the 100 mm hover; the simulation uses 2 s)
 
 
 class RealPickPlace(PickPlace):
     def __init__(self, io, robot, camera, mode: str = "track", place_xy=None, on_step=None, grasp_offset=(0.0, 0.0)):
-        if mode not in ("track", "pick", "static"):
-            raise ValueError("mode must be 'track', 'pick' or 'static'")
-        if mode in ("pick", "static") and place_xy is None:
+        if mode not in ("track", "pick", "static", "moving"):
+            raise ValueError("mode must be 'track', 'pick', 'static' or 'moving'")
+        if mode in ("pick", "static", "moving") and place_xy is None:
             raise ValueError(f"mode '{mode}' needs place_xy")
         super().__init__(io, robot, io, on_step=on_step, camera=camera, approach="track")
+        cube_top.camera = camera
         self.io = io
         self.mode = mode
         self.place_xy = None if place_xy is None else np.asarray(place_xy, dtype=float)
@@ -62,6 +69,9 @@ class RealPickPlace(PickPlace):
         self.align_deg = None    # deg, how far that moved the grasp yaw
         self.grasp_offset = np.array([*grasp_offset, 0.0], dtype=float)  # m, world, added to the measured cube (static)
         self.static_cube = None  # the cube measured in mode "static", before the offset
+        self.failed_frame = None  # (rgb, depth) when too few frames gave the cube, for the run's log
+        self.odd_frames = []      # (rgb, depth, size in mm) with an unusual fitted top while following
+        self.last_odd = -1.0      # s, when the last of them was kept
 
     def _known_height(self, cube):
         z = grasp.TABLE_Z + cube_pose.CUBE_HALF_HEIGHT
@@ -71,6 +81,21 @@ class RealPickPlace(PickPlace):
     def _capture_cube(self):
         cube = super()._capture_cube()
         return None if cube is None else self._known_height(cube)
+
+    def _measure_cube(self):
+        """The EKF's measurement while following, with the wider size tolerance; MEASURE keeps cube_top.SIZE_TOL."""
+        strict = cube_top.SIZE_TOL
+        cube_top.SIZE_TOL = TRACK_SIZE_TOL
+        try:
+            m = super()._measure_cube()
+        finally:
+            cube_top.SIZE_TOL = strict
+        if m is not None and len(self.odd_frames) < ODD_FRAMES and (self.elapsed - self.last_odd) > 0.5:
+            size = np.array(m[0].top_size)
+            if np.any(np.abs(size - cube_pose.CUBE_SIDE) > strict):
+                self.odd_frames.append((*self.sim.read_camera(), np.round(1000.0 * size, 1).tolist()))
+                self.last_odd = self.elapsed
+        return m
 
     def _control_step(self, q_ref: np.ndarray, qd_ref: np.ndarray) -> None:
         self.io.send(q_ref, qd_ref)
@@ -148,6 +173,7 @@ class RealPickPlace(PickPlace):
         self.records.append({"state": "MEASURE", "ok": ok, "elapsed": 0.0,
                              "reason": None if ok else f"{len(cubes)} of {STATIC_FRAMES} frames"})
         if not ok:
+            self.failed_frame = self.sim.read_camera()
             return None
         yaws = 4.0 * np.array([c.yaw for c in cubes])
         return dataclasses.replace(cubes[-1], pos=np.median([c.pos for c in cubes], axis=0),
@@ -227,7 +253,7 @@ class RealPickPlace(PickPlace):
     def run(self, timeout: float = 120.0) -> dict:
         self.timeout = float(timeout)
         # The RG2 stays at its last width between runs, and the simulation's gripper starts open.
-        gripper_closure = 0.0 if self.mode in ("pick", "static") else None
+        gripper_closure = 0.0 if self.mode in ("pick", "static", "moving") else None
         if not self._hold("START", 0.2, q_hold=self.q_start, gripper_closure=gripper_closure):
             return self._fail("timeout at start")
         if self.mode == "static":
@@ -241,6 +267,11 @@ class RealPickPlace(PickPlace):
         if selected is None:
             return self._fail("no feasible pregrasp IK solution")
         psi, _ = selected
+
+        if self.mode == "moving":
+            if self._track(cube, psi) is None:
+                return self._fail("TRACK failed")
+            return self._run_static()
 
         cube = self._track(cube, psi)
         if cube is None:
