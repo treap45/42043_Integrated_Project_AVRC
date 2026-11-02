@@ -209,10 +209,20 @@ def main():
     if pp.z_offsets:
         print(f"  camera cube height minus the known height: {1000 * np.median(pp.z_offsets):+.1f} mm median "
               f"({len(pp.z_offsets)} estimates); a few mm off means calibration or --table-z-mm is off")
-    if pp.static_cube is not None:
-        c = np.linalg.inv(sim_world_from_rtde()) @ np.array([*pp.static_cube.pos, 1.0])
-        print(f"  cube measured at ({c[0]:.4f}, {c[1]:.4f}) m RTDE base, yaw {np.degrees(pp.static_cube.yaw):+.1f} deg, "
+    def cube_rtde(cube):
+        """[x, y] m in the RTDE base frame and yaw in degrees of a cube estimate, for the log."""
+        c = np.linalg.inv(sim_world_from_rtde()) @ np.array([*cube.pos, 1.0])
+        return [float(c[0]), float(c[1]), float(np.degrees(cube.yaw))]
+
+    measured = None if pp.static_cube is None else cube_rtde(pp.static_cube)
+    placed = None if pp.placed_cube is None else cube_rtde(pp.placed_cube)
+    if measured is not None:
+        print(f"  cube measured at ({measured[0]:.4f}, {measured[1]:.4f}) m RTDE base, yaw {measured[2]:+.1f} deg, "
               f"grasp offset {offset_rtde} mm")
+    if io.grasp_width is not None:
+        print(f"  grasp width {io.grasp_width:.1f} mm, held={pp.held_at_grasp}")
+    if placed is not None:
+        print(f"  placed cube seen at ({placed[0]:.4f}, {placed[1]:.4f}) m RTDE base, yaw {placed[2]:+.1f} deg")
     if pp.align_deg is not None:
         print(f"  grasp yaw changed by {pp.align_deg:.1f} deg after TRACK (cube yaw {np.degrees(pp.yaw_at_stop):+.1f} deg)")
     if pp.track_log:
@@ -244,7 +254,9 @@ def main():
     (out / "run.json").write_text(json.dumps({
         "args": vars(args), "error": error, "outcome": None if outcome is None else
         {k: v for k, v in outcome.items() if k != "states"}, "records": pp.records, "track_log": pp.track_log,
-        "samples": viewer.log, "estimates": dict(cube_top.counts), "failed_sizes": cube_top.sizes[-200:], "settings": {k: list(v) for k, v in changed.items()},
+        "samples": viewer.log, "cube_measured_rtde": measured, "cube_placed_rtde": placed, "grasp_offset_mm": offset_rtde,
+        "grasp_width_mm": io.grasp_width, "grasp_held": pp.held_at_grasp, "track_stop_time": pp.track_stop_time,
+        "overruns": io.overruns, "estimates": dict(cube_top.counts), "failed_sizes": cube_top.sizes[-200:], "settings": {k: list(v) for k, v in changed.items()},
     }, indent=1, default=float))
     print(f"  log: {out}/run.json")
     sys.exit(0 if outcome is not None and outcome["ok"] and not error else 1)

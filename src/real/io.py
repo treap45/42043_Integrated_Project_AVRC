@@ -72,6 +72,7 @@ class SafetyLimits:
 class _VelocityIO:
     dt = DT
     grasp_held = None  # result of the last close: True or False on the RG2, None when the gripper cannot tell
+    grasp_width = None # mm, the RG2's width after the last close
 
     def __init__(self, robot, limits: SafetyLimits, kp: float = KP):
         self.robot = robot
@@ -242,6 +243,7 @@ class RealIO(_VelocityIO):
             return
         if closure >= 0.5:
             w, self.grasp_held = self.gripper.close_on(self.cube_side_mm)
+            self.grasp_width = w
             print(f"  gripper closed at {w:.1f} mm, held={self.grasp_held}")
         else:
             if self.grasp_held:

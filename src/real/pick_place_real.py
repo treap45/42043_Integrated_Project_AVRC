@@ -69,6 +69,8 @@ class RealPickPlace(PickPlace):
         self.align_deg = None    # deg, how far that moved the grasp yaw
         self.grasp_offset = np.array([*grasp_offset, 0.0], dtype=float)  # m, world, added to the measured cube (static)
         self.static_cube = None  # the cube measured in mode "static", before the offset
+        self.placed_cube = None  # the cube measured from the start pose after placing it, for the run's log
+        self.held_at_grasp = None  # the gripper's verdict at the grasp, for the run's log
         self.failed_frame = None  # (rgb, depth) when too few frames gave the cube, for the run's log
         self.odd_frames = []      # (rgb, depth, size in mm) with an unusual fitted top while following
         self.last_odd = -1.0      # s, when the last of them was kept
@@ -158,9 +160,9 @@ class RealPickPlace(PickPlace):
             return None
         return psi_new
 
-    def _measure_static(self):
+    def _measure_static(self, name: str = "MEASURE"):
         """The cube from several frames with the arm still: median position, yaw averaged on four times the angle."""
-        self.state = "MEASURE"
+        self.state = name
         q_hold = self.ctrl.xhat[:, 0].copy()
         cubes = []
         for _ in range(STATIC_FRAMES):
@@ -170,10 +172,11 @@ class RealPickPlace(PickPlace):
             for _ in range(FIND_PERIOD):
                 self._control_step(q_hold, np.zeros(6))
         ok = len(cubes) >= STATIC_MIN_FRAMES
-        self.records.append({"state": "MEASURE", "ok": ok, "elapsed": 0.0,
+        self.records.append({"state": name, "ok": ok, "elapsed": 0.0,
                              "reason": None if ok else f"{len(cubes)} of {STATIC_FRAMES} frames"})
         if not ok:
-            self.failed_frame = self.sim.read_camera()
+            if name == "MEASURE":
+                self.failed_frame = self.sim.read_camera()
             return None
         yaws = 4.0 * np.array([c.yaw for c in cubes])
         return dataclasses.replace(cubes[-1], pos=np.median([c.pos for c in cubes], axis=0),
@@ -203,6 +206,7 @@ class RealPickPlace(PickPlace):
             return self._fail("DESCEND failed")
         if not self._hold("GRASP", 0.5, gripper_closure=1.0):
             return self._fail("GRASP timed out")
+        self.held_at_grasp = self.io.grasp_held
         if self.io.grasp_held is False:
             return self._fail("the gripper closed on nothing; the arm stays at the grasp height")
         if not self._move_cartesian("LIFT", p_grasp, p_lift, rotation, move_s):
@@ -233,6 +237,7 @@ class RealPickPlace(PickPlace):
             return self._fail("RETREAT failed")
         if not self._move_joint("RETURN", self.q_start):
             return self._fail("return to the start pose failed")
+        self.placed_cube = self._measure_static("MEASURE_PLACED")  # for the log only: None does not fail the task
         return {"ok": True, "elapsed": self.elapsed, "states": self.records, "reason": None}
 
     def _run_static(self) -> dict:

@@ -24,6 +24,7 @@ YAW_SIGMA = 0.03  # rad, measurement noise of the cube yaw (simulation 0.01; a s
 camera = None     # FixedCameraModel, set by RealPickPlace
 counts = collections.Counter()  # why estimates failed, for the run's log
 sizes = []        # mm, the fitted tops that failed the size check
+COAST_S = 0.5     # s, without an accepted measurement before the EKF stops extrapolating
 SIZE_TOL = 0.008  # m, of the fitted top against the cube edge (cube_pose.py: 0.005); the 60 mm top measures 53-59 mm
 
 
@@ -80,6 +81,34 @@ def cube_measurement(points_cv, points_w, cube, K_cam):
 
 
 class LabCubeEKF(CubeEKF):
+    """The cube EKF with the lab's yaw noise, which does not coast without measurements.
+
+    The arm follows this filter's position, so after a run of frames with no valid measurement (the pusher hiding the
+    cube, say) the constant-velocity prediction would lead it along a path the cube is not on: 23 cm in one lab run.
+    After COAST_S without an accepted measurement the velocity is taken as zero, so the arm waits where it is, and
+    velocity_test() fails, so that a cube the camera cannot see is not declared stopped.
+    """
+
     def __init__(self, x0, dt, **kwargs):
         kwargs.setdefault("R", np.diag([0.5**2, 0.5**2, 0.001**2, YAW_SIGMA**2]))
         super().__init__(x0, dt, **kwargs)
+        self._blind_steps = 0
+
+    @property
+    def blind(self) -> bool:
+        return self._blind_steps * self.dt > COAST_S
+
+    def predict(self):
+        self._blind_steps += 1
+        if self.blind:
+            self.x[3:5] = 0.0
+        return super().predict()
+
+    def update(self, *args, **kwargs):
+        status = super().update(*args, **kwargs)
+        if status in ("accepted", "reinit"):
+            self._blind_steps = 0
+        return status
+
+    def velocity_test(self) -> float:
+        return float("inf") if self.blind else super().velocity_test()
