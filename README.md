@@ -2,13 +2,19 @@
 
 ## Overview
 
+**Project page: <https://treap45.github.io/42043_Integrated_Project_AVRC/>** (design, parameters, results and statements).
+
+UTS 41014 / 42043 Integrated Project, Track B, personalised. A UR3e follows a cube that is pushed across a table, decides from its own estimate when the cube has stopped, then picks and places it. Joints: one Kalman filter per joint and LQR on the estimated state. Cube: an EKF through the camera projection and PBVS. It runs in MuJoCo and on the lab UR3e with an RG2 and a fixed D435i. Ground truth from the simulator is used only to score trials and for the display panel.
+
+Branches: `main` has the simulation; `real` adds the lab robot code; `advanced` adds the occluder extension to `main`; `github_page` holds the project page, its logs and its build script.
+
 ## Installation
 
 Requires git and either [uv](https://docs.astral.sh/uv/) (recommended) or Python 3.12.
 
 ```bash
-git clone --recursive https://github.com/treap45/AVRC.git
-cd AVRC
+git clone --recursive https://github.com/treap45/42043_Integrated_Project_AVRC.git
+cd 42043_Integrated_Project_AVRC
 # if cloned without --recursive:
 git submodule update --init --recursive
 ```
@@ -89,15 +95,40 @@ python scripts/demo_sim.py --record videos/demo.mp4 --duration 10 --no-window
 
 ## Project Structure
 
+```
+main.py          entry point and evaluator (the only place the pipeline's ground truth is read)
+assets/          scene and controller models
+configs/         calibration results
+src/sim/         simulation interface, sensor noise, randomisation
+src/model/       joint state-space model, controller-side robot model
+src/perception/  segmentation, projection, cube and zone estimates, calibration
+src/estimation/  joint KF, cube EKF, world-frame KF, coordinated-turn EKF
+src/control/     LQR, PD, arm controller, PBVS
+src/planning/    IK, trajectories, grasp poses
+src/task/        task state machine
+src/real/        camera, RTDE, RG2, safety limits, eye-to-hand calibration, lab settings
+scripts/         checks with PASS or FAIL, experiments, lab run
+```
+
 ## Results
 
+See the [project page](https://treap45.github.io/42043_Integrated_Project_AVRC/). To reproduce them:
+
+```bash
+python scripts/watch_motion.py --motion arc      # harder motion, one live run in a window
+python scripts/watch_motion.py --motion s_curve
+bash scripts/evaluate_all.sh   # the simulation experiments, about an hour; logs in results/eval/
+```
+
 ## Contributions
+
+See the [project page](https://treap45.github.io/42043_Integrated_Project_AVRC/#statements).
 
 ## Generative AI Declaration
 
 Tool: Claude Code (Anthropic).
 
-Purpose: setting up the environment and the simulation (scene, simulation interface, sensor models, randomisation); writing test, demo and evaluation scripts; reviewing and revising the author's code; writing the real-robot interface and calibration tooling; and explaining concepts. All AI-assisted code was reviewed and tested by the author.
+Purpose: setting up the environment and simulation; writing test, demo and evaluation scripts; reviewing and revising the author's code; writing parts of the controller, estimator and extension code, and the real-robot interface and calibration tooling, at the author's direction; building the project page; drafting the demo video's voice-over script and cutting the video; and explaining concepts. The video's voice-over is synthesised with Kokoro, a text-to-speech model, run locally. All AI-assisted code was reviewed and tested by the author.
 
 ## Acknowledgements
 
