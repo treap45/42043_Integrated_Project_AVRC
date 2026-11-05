@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moving Cube Pick</title>
+<meta name="description" content="Vision-guided pick and place of a moving cube on a UR3e: state-space joint control, Kalman and extended Kalman filtering, PBVS, in MuJoCo and on the real robot.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' rx='2' fill='%23d03b3b'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body,{delimiters:[{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}]})"></script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc" aria-label="Sections">
+  <p class="toc-title">Moving Cube Pick</p>
+  <ol>
+    <li><a href="#abstract">Abstract</a></li>
+    <li><a href="#demo">Demo</a></li>
+    <li><a href="#system">System</a></li>
+  </ol>
+  <ol class="toc-group">
+    <li><a href="#modelling"><span class="part">A</span>Modelling</a></li>
+    <li><a href="#sensing"><span class="part">B</span>Sensing</a></li>
+    <li><a href="#estimation"><span class="part">C</span>Estimation</a></li>
+    <li><a href="#control"><span class="part">D</span>Control</a></li>
+    <li><a href="#robustness"><span class="part">E</span>Robustness</a></li>
+  </ol>
+  <ol class="toc-group">
+    <li><a href="#hardware">Real robot</a></li>
+    <li><a href="#limits">Limits</a></li>
+    <li><a href="#run">Code and run</a></li>
+    <li><a href="#statements">Statements</a></li>
+  </ol>
+  <button class="theme-toggle" id="theme-toggle" type="button">Light / dark</button>
+</nav>
+
+<main>
+<header id="abstract">
+  <div class="masthead">
+    <h1>Following and picking a moving cube with a UR3e</h1>
+    <p class="authors"><strong>Tianyang Shen</strong> &middot; Group 96</p>
+    <p class="affil">University of Technology Sydney &middot; 42043 Robotics Studio 1 &middot; Integrated Project, Track B (personalised)</p>
+    <div class="links">
+      <a class="link-btn" href="#demo">Video</a>
+      <a class="link-btn" href="https://github.com/treap45/42043_Integrated_Project_AVRC">Code</a>
+      <a class="link-btn" href="data/logs.zip" download="AVRC_logs.zip">Data</a>
+    </div>
+  </div>
+  <h2>Abstract</h2>
+  <p class="lede">A robot arm follows a cube that is being pushed across a table, decides from its own estimate when the cube has stopped, then picks it up and places it. The controller uses estimated states only. It runs in MuJoCo and on the lab UR3e. Beyond the required Track B pipeline, the project adds a moving target with a cube EKF, and a hardware implementation.</p>
+  <p class="lede">An active-perception extension on branch <code>advanced</code>, in simulation with a static cube and 1-3 occluders, estimates the occluders, takes up to two extra views when no grasp yaw is safe, and refuses the grasp if none is found. Over 50 trials, mid-motion failures fell from {{occ_off_collided}} to {{occ_active_collided}} and placements rose from {{occ_off_placed}} to {{occ_active_placed}}, with {{occ_active_refused}} trials refused.</p>
+  <p class="caption" style="margin-bottom:20px">Results are from branch <code>real</code> at <code>d78812e</code> and branch <code>advanced</code> at <code>9ac8d1b</code>.</p>
+  <div class="stats">
+    <div class="stat"><div class="value">{{moving_lqr.placed}}/{{moving_lqr.n}}</div><div class="label">moving-cube trials placed in simulation</div><div class="where">Seeds 0-99, noisy camera, committed calibration</div></div>
+    <div class="stat"><div class="value">{{moving_lqr.omed}} mm</div><div class="label">median grasp offset, largest {{moving_lqr.omax}} mm</div><div class="where">Against simulator truth, read for evaluation only</div></div>
+    <div class="stat"><div class="value">{{hw_moving_ok}}/{{hw_moving_n}}</div><div class="label">hardware moving-cube runs completed, cube pushed by hand</div><div class="where">Across changing code in one day; the final code ran twice</div></div>
+    <div class="stat"><div class="value">{{hw_static_ok}}/{{hw_static_n}}</div><div class="label">hardware static-cube runs completed</div><div class="where">One failure: the cube was removed after it was measured</div></div>
+  </div>
+  <p class="caption">A success in simulation means lifted more than 5 cm for 2 s, then at rest within 2 cm of the place zone. On hardware, completed means every state finished and the gripper reported a hold; placement was not measured run by run. See <a href="#hardware">Real robot</a>.</p>
+</header>
+
+<section id="demo">
+  <h2>Demo</h2>
+  <figure>
+    <video controls preload="metadata" poster="media/demo_video.jpg" aria-label="Five-minute demo video with voice-over"><source src="media/demo_video.mp4" type="video/mp4"></video>
+    <figcaption><strong>Demo video, 4:54.</strong> Task in simulation, estimate and uncertainty against truth, disturbed and varied trials, the occluder extension, and the lab robot. Sped-up parts are marked on screen. <a href="media/demo_video.mp4">Open the video file</a>.</figcaption>
+  </figure>
+  <p class="caption">In the simulation panel, true values are read for display and scoring only; they never reach the pipeline. The lab footage is phone recordings. They are not matched to individual logged runs, may come from development versions of the code rather than the final one, and placement error was not measured. Run results are in <a href="#hardware">Real robot</a>.</p>
+</section>
+
+<section id="system">
+  <h2>System</h2>
+  <p>Two loops run at different rates. The inner loop estimates and controls the joints at 500 Hz from encoder readings alone. The outer loop estimates the cube from RGB-D at 10 Hz and moves the joint reference. Simulator truth goes to one place only, the evaluator.</p>
+  <figure>
+    <div class="plate">
+    <svg viewBox="0 0 800 400" role="img" aria-label="Pipeline: RGB-D goes through perception, cube EKF and PBVS to a joint reference; encoders go through joint Kalman filters to LQR, which sends torque to the arm. Simulator truth goes only to the evaluator.">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--ink-2)"/></marker></defs>
+      <style>
+        .bx{fill:var(--surface-2);stroke:var(--axis);stroke-width:1}.bx-a{fill:color-mix(in srgb,var(--series-1) 13%,var(--surface));stroke:var(--series-1)}.bx-b{fill:color-mix(in srgb,var(--series-2) 13%,var(--surface));stroke:var(--series-2)}
+        .tl{font:600 13.5px var(--sans);fill:var(--ink);text-anchor:middle}.ts{font:12px var(--sans);fill:var(--ink-2);text-anchor:middle}.tg{font:600 12.5px var(--sans);fill:var(--ink-2)}.ln{stroke:var(--ink-2);stroke-width:1.4;fill:none}.ed{font:11.5px var(--sans);fill:var(--ink-2)}
+      </style>
+      <text class="tg" x="16" y="22">Outer loop, 10 Hz vision and 500 Hz prediction</text>
+      <rect class="bx bx-a" x="16" y="34" width="150" height="64" rx="7"/><text class="tl" x="91" y="60">Perception</text><text class="ts" x="91" y="78">HSV, depth, top-face fit</text>
+      <rect class="bx bx-a" x="210" y="34" width="150" height="64" rx="7"/><text class="tl" x="285" y="60">Cube EKF</text><text class="ts" x="285" y="78">x, y, &#968;, v&#8339;, v&#7527;</text>
+      <rect class="bx bx-a" x="404" y="34" width="150" height="64" rx="7"/><text class="tl" x="479" y="60">Stop test</text><text class="ts" x="479" y="78">speed, &#967;&#178;, window</text>
+      <rect class="bx bx-a" x="598" y="34" width="186" height="64" rx="7"/><text class="tl" x="691" y="60">PBVS and DLS</text><text class="ts" x="691" y="78">and the task state machine</text>
+      <path class="ln" d="M166 66H208" marker-end="url(#arr)"/><text class="ed" x="187" y="58" text-anchor="middle">z</text>
+      <path class="ln" d="M360 66H402" marker-end="url(#arr)"/><text class="ed" x="381" y="58" text-anchor="middle">x&#770;, P</text>
+      <path class="ln" d="M554 66H596" marker-end="url(#arr)"/>
+      <text class="tg" x="396" y="221" text-anchor="end">Inner loop, 500 Hz</text>
+      <rect class="bx bx-b" x="404" y="184" width="150" height="64" rx="7"/><text class="tl" x="479" y="210">Joint KFs</text><text class="ts" x="479" y="228">q&#770;, q&#775;&#770;, d&#770; per joint</text>
+      <rect class="bx bx-b" x="598" y="184" width="186" height="64" rx="7"/><text class="tl" x="691" y="210">LQR + &#285;(q&#770;) &#8722; d&#770;</text><text class="ts" x="691" y="228">gains rescheduled every 0.1 s</text>
+      <path class="ln" d="M691 98V182" marker-end="url(#arr)"/><text class="ed" x="698" y="142">q_ref, q&#775;_ref</text>
+      <path class="ln" d="M554 216H596" marker-end="url(#arr)"/>
+      <path class="ln" d="M479 184V144H590V98" marker-end="url(#arr)"/><text class="ed" x="472" y="150" text-anchor="end">q&#770;, also sets the wrist camera pose</text>
+      <rect class="bx" x="404" y="304" width="380" height="60" rx="7"/><text class="tl" x="594" y="330">UR3e with gripper, cube, table (MuJoCo or lab)</text><text class="ts" x="594" y="348">torque motors in simulation</text>
+      <path class="ln" d="M691 248V302" marker-end="url(#arr)"/><text class="ed" x="698" y="280">&#964;</text>
+      <path class="ln" d="M479 302V250" marker-end="url(#arr)"/><text class="ed" x="486" y="280">encoders y</text>
+      <path class="ln" d="M404 334H91V100" marker-end="url(#arr)"/><text class="ed" x="100" y="326">RGB-D, 640 &#215; 480</text>
+      <rect class="bx" x="150" y="248" width="196" height="44" rx="7" stroke-dasharray="5 4"/><text class="tl" x="248" y="268">Evaluator (TrialMonitor)</text><text class="ts" x="248" y="284">reads truth, drives nothing</text>
+      <path class="ln" d="M404 356H330V294" stroke-dasharray="5 4" marker-end="url(#arr)"/><text class="ed" x="165" y="376">truth, for scoring and display only</text>
+    </svg></div>
+    <figcaption><strong>Data flow.</strong> On the lab robot the camera is fixed instead of wrist-mounted, and the interface takes joint velocity, so the torque-level inner loop is replaced by <code>q&#775;_cmd = q&#775;_ref + 4 (q_ref &#8722; q)</code> sent through <code>speedJ</code>.</figcaption>
+  </figure>
+  <p><strong>Task states:</strong> OBSERVE &rarr; TRACK (PBVS on the EKF until the cube stops) &rarr; APPROACH (PBVS to 60 mm above it) &rarr; DESCEND (open loop) &rarr; GRASP &rarr; LIFT &rarr; TRANSPORT &rarr; PLACE &rarr; RELEASE &rarr; RETREAT &rarr; RETURN.</p>
+  <p><strong>Ground truth:</strong> <code>sim.ground_truth()</code> is defined in <code>src/sim/env.py</code> and read only in <code>main.py</code> (<code>TrialMonitor</code> and the display panel) and at the end of <code>scripts/run_real.py --sim</code>. Run <code>grep -rn ground_truth src main.py scripts/run_real.py</code> to check.</p>
+  <div class="pictures">
+    <div><img src="media/sim_overview.jpg" alt="Simulated UR3e on a table with a red cube and a magenta place zone" loading="lazy"><div class="c">Simulated scene: UR3e, Robotiq 2F-85, wrist D435.</div></div>
+    <div><img src="media/sim_wrist_rgb.jpg" alt="Wrist camera view of the cube" loading="lazy"><div class="c">Wrist RGB from the observe pose.</div></div>
+    <div><img src="media/lab_tracking.jpg" alt="Lab camera view of the UR3e above a red cube that a person pushes with a ruler" loading="lazy"><div class="c">Lab: fixed D435i view while the cube is pushed with a ruler.</div></div>
+  </div>
+</section>
+
+<section id="modelling">
+  <h2><span class="tag">Part A</span>Modelling</h2>
+  <h3>Joint model</h3>
+  <p>Each joint is modelled on its own as an inertia driven by the feedback torque and a lumped disturbance. Gravity is compensated separately, from a payload-free controller-side model.</p>
+  <div class="math">\[ J_i \ddot q_i = u_i + d_i,\qquad x_i = \begin{bmatrix} q_i \\ \dot q_i \\ d_i \end{bmatrix},\quad A_i = \begin{bmatrix} 0 & 1 & 0 \\ 0 & 0 & 1/J_i \\ 0 & 0 & 0 \end{bmatrix},\quad B_i = \begin{bmatrix} 0 \\ 1/J_i \\ 0 \end{bmatrix},\quad C = \begin{bmatrix} 1 & 0 & 0 \end{bmatrix} \]</div>
+  <p>\(J_i\) is the diagonal of the mass matrix \(M(\hat q)\), armature included. The model is discretised by zero-order hold at 2 ms, and the matrix exponential agrees with a hand-derived closed form (<code>scripts/check_joint_ss.py</code>). At the observe pose:</p>
+  <div class="table-wrap"><table><thead><tr><th>Joint</th><th class="n">pan</th><th class="n">lift</th><th class="n">elbow</th><th class="n">wrist 1</th><th class="n">wrist 2</th><th class="n">wrist 3</th></tr></thead><tbody>
+    <tr><td>\(J_i\) (kg m&sup2;)</td><td class="n">0.2496</td><td class="n">0.5275</td><td class="n">0.2563</td><td class="n">0.1145</td><td class="n">0.1040</td><td class="n">0.1002</td></tr>
+    <tr><td>Largest gravity error from the 1.175 kg unmodelled payload (N m)</td><td class="n">0.000</td><td class="n">6.646</td><td class="n">4.248</td><td class="n">1.888</td><td class="n">1.569</td><td class="n">0.095</td></tr>
+    <tr><td>\(M_{ii}\) error, median over 500 poses</td><td class="n">19.5 %</td><td class="n">20.4 %</td><td class="n">24.9 %</td><td class="n">15.9 %</td><td class="n">18.4 %</td><td class="n">1.4 %</td></tr>
+  </tbody></table></div>
+  <p class="evidence">Logs: <a href="data/logs/chk_joint_ss.log">chk_joint_ss</a>, <a href="data/logs/chk_ctrl_model.log">chk_ctrl_model</a>.</p>
+  <p><strong>Controllability and observability.</strong> With an encoder on \(q\) alone, the observability matrix has rank 3 for all six joints, in continuous and discrete time. So velocity and disturbance can be estimated from position. The controllability matrix of the full state has rank 2, because \(u\) cannot influence \(d\). That is why LQR is designed on the \([q, \dot q]\) subsystem, which has rank 2, and \(d\) is cancelled by feed-forward of its estimate instead.</p>
+  <p><strong>Assumptions, and where they break.</strong> The diagonal model ignores coupling between joints, the payload and friction; all of these land in \(d\). A constant \(J\) was the assumption that failed: \(J_\text{pan}\) grows from 0.25 at the observe pose to about 0.52 at 0.41 m reach. A design fixed at the observe pose drops from 14.2 Hz, \(\zeta\) 0.84, to 9.5 Hz, \(\zeta\) 0.56 there, which matches the 9.3 Hz oscillation measured at the shoulder. <a href="#control">Gain scheduling</a> resolves it.</p>
+  <h3>Cube model</h3>
+  <p>The cube is rigid and flat on the table, with constant velocity plus white acceleration noise. The measurement goes through the camera projection, which makes the filter nonlinear:</p>
+  <div class="math">\[ x = \begin{bmatrix} p_x & p_y & \psi & v_x & v_y \end{bmatrix}^\top,\quad z = h(x) = \begin{bmatrix} f_x X/Z + c_x \\ f_y Y/Z + c_y \\ Z \\ \psi \end{bmatrix},\quad \begin{bmatrix} X \\ Y \\ Z \end{bmatrix} = R_{wc}^\top \left( \begin{bmatrix} p_x \\ p_y \\ z_\text{top} \end{bmatrix} - t_{wc} \right) \]</div>
+  <p>The analytic Jacobian matches central differences to \(4.4 \times 10^{-11}\) relative error over 200 random states and poses (<a href="data/logs/chk_cube_ekf.log">log</a>). The velocity is not visible in one frame: \(H\) has rank 3. It becomes observable through the dynamics, and the observability matrix over the constant-velocity model has rank 5.</p>
+  <div class="table-wrap"><table><thead><tr><th>State</th><th>Sensor</th><th>When the measurement is lost</th></tr></thead><tbody>
+    <tr><td>\(q\)</td><td>Encoder, directly</td><td>Not lost in these runs</td></tr>
+    <tr><td>\(\dot q, d\)</td><td>Encoder, through the joint dynamics</td><td>Not lost in these runs</td></tr>
+    <tr><td>\(p_x, p_y, \psi\)</td><td>RGB-D, directly (with the camera pose)</td><td>Prediction only, and \(P\) grows. 1 s without frames costs about 2 mm on a straight path and 6 mm on an arc.</td></tr>
+    <tr><td>\(v_x, v_y\)</td><td>RGB-D, through the motion model</td><td>Sim: held constant. Lab: set to zero after 0.5 s, and no stop can be declared, because a coasting estimate led the arm 23 cm away from the cube in one lab run.</td></tr>
+  </tbody></table></div>
+</section>
+
+<section id="sensing">
+  <h2><span class="tag">Part B</span>Sensing</h2>
+  <h3>Frames</h3>
+  <figure>
+    <div class="plate">
+    <svg viewBox="0 0 800 330" role="img" aria-label="Frame chains. Simulation: world, base, TCP by forward kinematics of the estimated joints, wrist camera by calibrated hand-eye, cube by depth back-projection. Lab: RTDE base, simulation world by a fixed transform, fixed camera by eye-to-hand calibration, cube by depth.">
+      <text class="tg" x="16" y="20">Simulation: wrist camera, moves with the arm</text>
+      <g>
+        <rect class="bx" x="16" y="34" width="112" height="58" rx="7"/><text class="tl" x="72" y="59">World W</text><text class="ts" x="72" y="77">table at z = 0.75</text>
+        <rect class="bx" x="186" y="34" width="112" height="58" rx="7"/><text class="tl" x="242" y="59">Base B</text><text class="ts" x="242" y="77">on the table</text>
+        <rect class="bx bx-b" x="356" y="34" width="112" height="58" rx="7"/><text class="tl" x="412" y="59">TCP T</text><text class="ts" x="412" y="77">between fingers</text>
+        <rect class="bx bx-a" x="526" y="34" width="112" height="58" rx="7"/><text class="tl" x="582" y="59">Camera C</text><text class="ts" x="582" y="77">OpenCV axes</text>
+        <rect class="bx" x="696" y="34" width="88" height="58" rx="7"/><text class="tl" x="740" y="59">Cube</text><text class="ts" x="740" y="77">top centre</text>
+        <path class="ln" d="M128 63H184" marker-end="url(#arr)"/><text class="ed" x="156" y="108" text-anchor="middle">fixed</text>
+        <path class="ln" d="M298 63H354" marker-end="url(#arr)"/><text class="ed" x="326" y="108" text-anchor="middle">FK(q&#770;)</text>
+        <path class="ln" d="M468 63H524" marker-end="url(#arr)"/><text class="ed" x="496" y="108" text-anchor="middle">hand-eye</text>
+        <path class="ln" d="M638 63H694" marker-end="url(#arr)"/><text class="ed" x="666" y="108" text-anchor="middle">depth, K&#8315;&#185;</text>
+      </g>
+      <text class="tg" x="16" y="166">Lab: fixed camera, independent of the arm</text>
+      <g>
+        <rect class="bx" x="16" y="180" width="112" height="58" rx="7"/><text class="tl" x="72" y="205">World W</text><text class="ts" x="72" y="223">same as sim</text>
+        <rect class="bx" x="186" y="180" width="112" height="58" rx="7"/><text class="tl" x="242" y="205">RTDE base R</text><text class="ts" x="242" y="223">B turned 180&#176;</text>
+        <rect class="bx bx-a" x="356" y="180" width="112" height="58" rx="7"/><text class="tl" x="412" y="205">Camera C</text><text class="ts" x="412" y="223">fixed D435i</text>
+        <rect class="bx" x="526" y="180" width="112" height="58" rx="7"/><text class="tl" x="582" y="205">Cube</text><text class="ts" x="582" y="223">top centre</text>
+        <path class="ln" d="M128 209H184" marker-end="url(#arr)"/><text class="ed" x="156" y="254" text-anchor="middle">180&#176; about z, 0.75 m</text>
+        <path class="ln" d="M298 209H354" marker-end="url(#arr)"/><text class="ed" x="326" y="254" text-anchor="middle">eye-to-hand</text>
+        <path class="ln" d="M468 209H524" marker-end="url(#arr)"/><text class="ed" x="496" y="254" text-anchor="middle">depth, K&#8315;&#185;</text>
+        <rect class="bx" x="186" y="270" width="112" height="50" rx="7"/><text class="tl" x="242" y="291">Flange F</text><text class="ts" x="242" y="308">RTDE TCP pose</text>
+        <rect class="bx" x="356" y="270" width="112" height="50" rx="7"/><text class="tl" x="412" y="291">ArUco marker</text><text class="ts" x="412" y="308">40 mm side</text>
+        <path class="ln" d="M242 238V268" marker-end="url(#arr)"/>
+        <path class="ln" d="M298 295H354" marker-end="url(#arr)"/>
+        <path class="ln" d="M412 268V240" marker-end="url(#arr)"/>
+        <text class="ed" x="478" y="299">solved jointly with C, only during calibration</text>
+      </g>
+    </svg></div>
+    <figcaption><strong>Frame diagram.</strong> Blue is the sensor frame, orange the frame that depends on the estimated joints. In simulation an error in \(\hat q\) moves the camera estimate; in the lab it does not. MuJoCo cameras look along &#8722;z, so a <code>diag(1, &#8722;1, &#8722;1)</code> converts to the OpenCV frame. The RTDE-to-simulation transform was checked against forward kinematics at two lab poses, 0.8 mm and 0.4&deg; apart.</figcaption>
+  </figure>
+  <h3>Noise model and calibration in simulation</h3>
+  <p><strong>Encoders:</strong> \(\sigma = 0.5\) mrad and 14-bit quantisation; measured error std 0.507-0.518 mrad against 0.512 expected (<a href="data/logs/chk_sim.log">log</a>). <strong>Depth:</strong> \(\sigma_z = k z^2 / \max(\cos\theta, \cos 75^\circ)\) with \(k = 0.01\ \text{m}^{-1}\), from stereo triangulation error growing with \(z^2\); 1.4 mm at the observe distance. The value is of the order of a D435 and was chosen, not fitted. Also modelled: edge pixels dropped with probability 0.5, 1 mm quantisation, and RGB noise of \(\sigma = 2\) (<a href="data/logs/chk_noise.log">log</a>).</p>
+  <div class="table-wrap"><table><thead><tr><th>Calibration in simulation, noisy camera (<code>scripts/calibrate_camera.py</code>)</th><th class="n">Result</th></tr></thead><tbody>
+    <tr><td>Checkerboard views for intrinsics</td><td class="n">20 detected of 35 placements</td></tr>
+    <tr><td>Intrinsics error fx / fy / cx / cy, distortion fixed at 0</td><td class="n">+0.26 / +0.31 / +0.01 / &#8722;0.37 px</td></tr>
+    <tr><td>Reprojection RMS</td><td class="n">0.109 px</td></tr>
+    <tr><td>Hand-eye error of the committed <code>configs/camera_calib.json</code></td><td class="n">0.11&deg;, 1.30 mm</td></tr>
+    <tr><td>Hand-eye error of a re-run on this commit</td><td class="n">0.15&deg;, 2.04 mm</td></tr>
+  </tbody></table></div>
+  <p class="evidence">Log: <a href="data/logs/calibrate.log">calibrate</a>. Hand-eye uses <code>cv2.calibrateHandEye</code> (Park and Martin) over 15 views.</p>
+  <div class="pictures" style="margin-bottom:16px;grid-template-columns:minmax(0,420px)"><div><img src="media/sim_handeye.jpg" alt="Simulated UR3e above a checkerboard lying on the table, with the wrist camera image and detected corners as an inset" loading="lazy"><div class="c">Eye-in-hand calibration: the board lies flat on the table and the wrist camera moves with the arm. Inset: the wrist image with the 54 detected corners, one of the 15 hand-eye views.</div></div></div>
+  <p><strong>What calibration changes.</strong> The calibrated model places the cube in absolute terms about 1 mm worse than the nominal one, yet the place error is no worse: {{moving_lqr.pmed}} mm against {{moving_nominal.pmed}} mm median. Cube and zone were seen with the same mount error, so a fixed mount bias mostly cancels when they are subtracted (development measurement, 2026-10-16: cube xy 1.71 against 0.69 mm median, place error 1.4 against 1.7 mm). The bias also shows up as the high NEES in <a href="#estimation">Part C</a>.</p>
+  <h3>Noise handling that real data forced</h3>
+  <ul>
+    <li><strong>Outlier trim.</strong> Depth noise pushed a few top-face points outside the true edge, stretching <code>minAreaRect</code> to 55.8 mm and failing the 50 &plusmn; 5 mm size check on 7 of 100 scenes. Trimming 0.5 % per side took that to 100/100.</li>
+    <li><strong>Top-face band on the D435i.</strong> At 0.9 m, a 5 mm band below the 98th-percentile height cut the 60 mm top to about 52 mm, and with the arm above the cube the mask picked up finger depth. The lab code selects the top face at its known height &plusmn;10 mm.</li>
+    <li><strong>Measured lab noise.</strong> At rest: 0.37 / 0.32 px, 0.65 mm depth, 1.5&deg; yaw. So the lab EKF uses a yaw \(\sigma\) of 0.03 rad, not 0.01. Depth temporal std on the plate at 0.81 m was 1.45 mm, equivalent to \(k = 0.0022\).</li>
+  </ul>
+  <h3>Eye-to-hand calibration on the robot</h3>
+  <div class="pictures" style="grid-template-columns:minmax(0,300px)"><div><img src="media/lab_handeye.jpg" alt="UR3e holding an ArUco marker in view of the fixed camera" loading="lazy"><div class="c">One of 25 calibration views, with the marker on the flange.</div></div></div>
+  <p style="margin-top:12px"><code>scripts/auto_handeye.py</code> chooses poses from a coarse solution, moves the arm, and runs a closed-form solve followed by joint reprojection refinement. The refinement is the reason for the added step: on synthetic data with a known answer, position error falls from 4.39 mm median (13.24 max) for Park to 0.54 mm (1.25 max) (<a href="data/logs/chk_eye_to_hand.log">log</a>).</p>
+  <div class="table-wrap"><table><thead><tr><th>Lab result (25 views, 40 mm marker)</th><th class="n">Value</th></tr></thead><tbody>
+    <tr><td>Reprojection error, mean / largest</td><td class="n">0.68 / 1.20 px</td></tr>
+    <tr><td>Bootstrap std, position and rotation</td><td class="n">[0.47, 0.72, 0.51] mm, 0.039&deg;</td></tr>
+    <tr><td>Repeat in the afternoon, same start and seed: change in camera pose</td><td class="n">0.2 mm, 0.028&deg;</td></tr>
+    <tr><td>Depth minus predicted marker depth</td><td class="n">+4.5 mm mean, 2.1 mm std</td></tr>
+  </tbody></table></div>
+  <p class="caption">These are repeatability figures, not absolute accuracy. The +4.5 mm depth offset is systematic and its cause is not settled: it may be D435i depth bias or the ruler-measured marker size.</p>
+</section>
+
+<section id="estimation">
+  <h2><span class="tag">Part C</span>Estimation</h2>
+  <p>The two filters match the two kinds of measurement. Each joint has a linear KF, since its measurement is linear. The cube has an EKF, since its measurement goes through the projection.</p>
+  <h3>Joint Kalman filter</h3>
+  <p>\(R = \sigma_\text{enc}^2 + \text{res}^2/12\), which gives 0.51 mrad, from the encoder specification plus quantisation. \(Q\) comes from continuous white noise on \(\dot q\) (0.05 rad/s/&radic;s) and \(d\) (\(\sigma_d\)), discretised by Van Loan. \(\sigma_d\) was picked by sweeping it under a sinusoidal excitation:</p>
+  {{tbl_sigma_d}}
+  <p class="caption"><strong>Consistency against responsiveness.</strong> The range across six joints, with 30 highlighted. Small \(\sigma_d\) cannot follow the disturbance and turns overconfident (NEES up to 140). Large \(\sigma_d\) passes more encoder noise into velocity. At 30 the KF beats finite differences on every joint. <a href="data/logs/chk_joint_kf.log">Log</a>.</p>
+  <p>The controller deploys \(\sigma_d\) = (30, 30, 20, 10, 8, 8), not 30 throughout. This is a deliberate trade: in a development run on 2026-10-19 the wrist torque noise halved (about 2.1 to 1.0 N m) while hold error and success did not change, at the cost of overconfidence on elbow and wrist 2 under the same excitation (NEES 7.0 and 4.4).</p>
+  <h3>Cube EKF</h3>
+  <p>Predicted at 500 Hz, updated at 10 Hz. \(R = \text{diag}(0.5^2\,\text{px}^2, 0.5^2\,\text{px}^2, (1\,\text{mm})^2, (0.01\,\text{rad})^2)\), set above a measured static noise of about 0.3 px, under 0.5 mm and 0.006 rad. \(\sigma_a = 0.01\ \text{m/s}^2/\sqrt{\text{s}}\), \(\sigma_\psi = 0.01\). Innovations with NIS over 13.28 (\(\chi^2\), 4 dof, 99 %) are rejected; a third rejection in a row re-initialises from the measurement, which acts as a manoeuvre detector.</p>
+  <figure>
+    <div class="plate small-multiples">
+      <div id="chart-ekf-x"></div>
+      <div id="chart-ekf-err"></div>
+      <div id="chart-ekf-v"></div>
+    </div>
+    <figcaption><strong>Estimate and uncertainty next to the true state, seed 0, TRACK.</strong> Position error RMS 0.89 mm, velocity error RMS 2.54 mm/s, 114 of 114 frames accepted, stop declared 1.98 s after the true stop. The 2&sigma; band is about 1 mm wide, too thin to see on the 100 mm scale of the top chart, so the second chart compares it with the error directly; its sawtooth is real, growing between frames and shrinking at each update. Sampled at 20 Hz for display; hover for values. <a href="data/ekf_trace_seed0.csv">Data</a>, <a href="data/logs/plot_ekf.log">log</a>.</figcaption>
+  </figure>
+  <p><strong>Why the error sits above the 2&sigma; band.</strong> The filter is overconfident, and the cause is not noise. The fixed mount bias from calibration does not average out, while the EKF assumes white measurement error. Giving the filter the exact mount removes most of it:</p>
+  {{tbl_nees}}
+  <p class="evidence">Arm held at observe, seeds 0-19. Logs: <a href="data/logs/chk_cube_ekf.log">calibrated</a>, <a href="data/logs/chk_cube_ekf_nominal.log">exact</a>.</p>
+  <p><strong>What if \(R\) were ten times smaller, or larger?</strong> Same frames, replayed offline:</p>
+  {{tbl_r_scale}}
+  <p class="caption">Position accuracy barely moves, because the error is dominated by the bias. With \(R \times 0.1\) innovations match \(R\) on paper (NIS/dim 1.09), but velocity gets noisier than the stop threshold, so only 4 of 20 stops are found. With \(R \times 10\) NEES looks almost ideal, yet NIS/dim falls to 0.09: the filter is hiding a bias behind a large \(R\), not modelling it. The better fix is a better calibration. <a href="data/logs/filters_r.log">Log</a>.</p>
+  <h3>An additional estimator compared: KF, EKF, coordinated-turn EKF</h3>
+  <p>Does the motion model matter? A world-frame linear KF (measurement back-projected first) and a coordinated-turn EKF (turn rate added as a state) were compared with the EKF on identical recorded frames, on three motions at 3-4 cm/s, seeds 0-19:</p>
+  {{tbl_filters}}
+  <p class="caption"><strong>Result.</strong> With frames arriving, all four give the same position error to within 0.04 mm, so at 10 Hz the turn model adds nothing. It matters during a dropout: on the arc, the CT-EKF halves the error after 1 s (median {{f_arc_ct}} against {{f_arc_ekf}} mm), and on a straight line it is slightly worse. Raising \(\sigma_a\) to 0.03 makes stop detection fail on most seeds. KF NEES is lower because its \(R\) is a separate estimate, which does not make it better. <a href="data/logs/filters.log">Log</a>.</p>
+  <p class="caption">Not settled: 20 seeds with no significance test, one dropout per trial, CT parameters not swept, and the arc is the case CT is built for.</p>
+</section>
+
+<section id="control">
+  <h2><span class="tag">Part D</span>Control</h2>
+  <h3>Joint LQR on the estimated state</h3>
+  <div class="math">\[ \tau = \text{clip}\Big( \hat g(\hat q) - K \begin{bmatrix} \hat q - q_\text{ref} \\ \hat{\dot q} - \dot q_\text{ref} \end{bmatrix} - \hat d,\ \pm\tau_\text{max} \Big) \]</div>
+  <p>Bryson weights state what is acceptable: \(q_\text{max}\) = 0.01 rad, \(\dot q_\text{max}\) = 1 rad/s and \(u_\text{max}\) = 20, 20, 10, 4, 4, 4 N m. The result is closed-loop bandwidths of 9.4-14.2 Hz with damping 0.77-0.84 at the observe pose. What limits raising them is encoder noise: it passes through the KF and appears as torque noise of about 4 N m on the big joints at rest. The KF is propagated with the torque actually applied after saturation, so clipping does not corrupt \(\hat d\).</p>
+  {{tbl_control}}
+  <p class="caption"><strong>Control effort against tracking.</strong> LQR rejects the impulse better; PD uses less torque while holding. Removing \(\hat d\) makes the payload error visible, more so under the softer PD. The disturbance feed-forward, not the feedback law, is what removes the steady error. Logs: <a href="data/logs/chk_control_lqr.log">LQR</a>, <a href="data/logs/chk_control_pd.log">PD</a>.</p>
+  <h3>Gain scheduling</h3>
+  <p>Every 0.1 s, \(J = \text{diag}(M(\hat q))\) is recomputed, and the KF models and gains are rebuilt from it. In a development measurement on 2026-10-21 at 0.41 m reach, this took hover jitter from 0.43 to 0.24 mm RMS and removed the 9 Hz spectral peak, with pan torque noise up from 3.63 to 3.80 N m. It is a smoothness gain, and it does not move the success rate on the default task: {{moving_fixed.placed}}/{{moving_fixed.n}} with it off, grasp offset {{moving_fixed.omed}} mm.</p>
+  <h3>PBVS</h3>
+  <div class="math">\[ \mathcal V = \lambda\, e + \mathcal V_\text{ff},\qquad \dot q_\text{ref} = J^\top \big(J J^\top + \mu^2 I\big)^{-1} \mathcal V \]</div>
+  <p>The law is position-based because depth gives a metric cube pose directly. \(\lambda\) = 1.5 s\(^{-1}\), a 0.67 s time constant, well under the joint bandwidth so that the loops separate. \(\mu\) = 0.02. Limits are 0.03 m/s and 0.5 rad/s (0.15 m/s in TRACK). Without feed-forward, the lag would be \(v/\lambda\), about 1 cm at 1.5 cm/s. Feeding the EKF velocity forward brings hover lag to {{moving_lqr.lag}} mm RMS. Below 60 mm the cube leaves the wrist camera's field of view, so the last 65 mm of descent are open loop.</p>
+  <h3>Velocity interface on the lab robot</h3>
+  <p>The UR3e accepts joint velocity through <code>speedJ</code>, so the torque design does not carry over. The planning, PBVS and state machine code do. The lab loop is <code>q&#775;_cmd = q&#775;_ref + 4 (q_ref &#8722; q)</code>, with these limits: 0.35 rad/s on any joint, 0.15 rad of tracking error, 0.5 m reach, and a predicted TCP height floor. Every exit path calls <code>speedStop</code>.</p>
+</section>
+
+<section id="robustness">
+  <h2><span class="tag">Part E</span>Integration and robustness</h2>
+  <h3>Repeated trials with varied conditions</h3>
+  <p>Each seed draws a new cube pose, yaw, motion and encoder and camera noise, reproducibly. All runs below are on <code>d78812e</code>, from one script (<code>scripts/evaluate_all.sh</code>), with raw logs linked.</p>
+  {{tbl_batch}}
+  <p class="evidence">Logs: <a href="data/logs/moving_lqr.log">moving_lqr</a>, <a href="data/logs/moving_pd.log">moving_pd</a>, <a href="data/logs/moving_fixed.log">moving_fixed</a>, <a href="data/logs/moving_ct.log">moving_ct</a>, <a href="data/logs/moving_noiseless.log">moving_noiseless</a>, <a href="data/logs/moving_nominal.log">moving_nominal</a>, <a href="data/logs/static_open.log">static_open</a>, <a href="data/logs/static_pbvs.log">static_pbvs</a>, <a href="data/logs/static_pd.log">static_pd</a>.</p>
+  <p>Stop was declared {{moving_lqr.delay}} s after the true stop (median; range {{moving_lqr.delay_min}}-{{moving_lqr.delay_max}} s), of which 2 s is the required window. EKF rejections across 100 trials: {{moving_lqr.rej}}. Zone position is fixed in the moving task, and cube speed is modest there (1-1.5 cm/s) on purpose, so that the arm is seen following; the faster motions are below.</p>
+  <h3>Disturbance: the cube moved during the approach</h3>
+  <figure>
+    <div class="plate"><div id="chart-push"></div></div>
+    <figcaption><strong>Closing the loop on vision removes the push from the grasp.</strong> One dot per seed. Look-then-move inherits the push as grasp offset; PBVS stays near 1 mm. At 25 mm the fingers often miss: {{push25_open_missed}} of 20 look-then-move trials never lifted the cube and have no dot.</figcaption>
+  </figure>
+  {{tbl_disturb}}
+  <p class="caption"><strong>A 2&deg; mount error:</strong> PBVS cuts the grasp offset (6.1 against 9.3 mm) but not the place error, since the zone is seen only once at OBSERVE. Moving-cube task under the same error: {{he2_track_row}} placed, with EKF rejections up from {{moving_lqr.rej}} per 100 trials to {{he2_track.rej}} per 20. Logs: <a href="data/logs/push_open.log">push_open</a>, <a href="data/logs/push_pbvs.log">push_pbvs</a>, <a href="data/logs/push_open15.log">push_open15</a>, <a href="data/logs/push_pbvs15.log">push_pbvs15</a>, <a href="data/logs/he2_open.log">he2_open</a>, <a href="data/logs/he2_pbvs.log">he2_pbvs</a>, <a href="data/logs/he2_track.log">he2_track</a>.</p>
+  <h3>Harder motion</h3>
+  {{tbl_motion}}
+  <p class="caption">The grasp is not sensitive to motion shape, since the arm picks after the cube stops. At 3-4 cm/s, the step in velocity at the start and stop of the motion exceeds the gate, which gives the rejections and re-initialisations. Stop delay rises from about 2.0 to 2.6 s; a causal link between the two was not tested. To watch one live, use <code>scripts/watch_motion.py</code>.</p>
+  <h3>Where the stop test breaks</h3>
+  <p>A constant-velocity filter cannot tell a pause from a stop, so the window length sets the limit:</p>
+  {{tbl_pause}}
+  <p class="caption"><strong>Latency against false stops.</strong> With a 2 s window, pauses up to 1.5 s are safe and pauses from 2.5 s are not. Failures follow the early stops. A 1 s window was tried in development; it failed from 1.5 s. Motion is scripted (2-3 cm/s, seeds 0-19). Hence the lab uses 4 s, since a person pushing pauses longer. Logs: <a href="data/logs/pause_2.5.log">pause_2.5</a> and siblings.</p>
+  <h3>Failures diagnosed during development</h3>
+  <div class="table-wrap"><table><thead><tr><th>Symptom</th><th>Traced to</th><th>Evidence and outcome</th></tr></thead><tbody>
+    <tr><td>First end-to-end run, 13/20: state timeouts</td><td>Estimator: the settle test \(|\hat{\dot q}| &lt; 0.02\) sat inside the velocity noise (std about 0.045 rad/s)</td><td>Averaged over 0.1 s, peak about 0.008. Fixed.</td></tr>
+    <tr><td>Zone reported incomplete after grasping</td><td>Sensing: the held cube covers the lower image</td><td>Zone view moved before the grasp.</td></tr>
+    <tr><td>PLACE timeouts at 0.46-0.49 m reach</td><td>Model: \(M_{00}\) 2.6-2.9 &times; the design value. Collision and singularity excluded (cond(J) 19-46)</td><td>Torque std 43 N m, 32 % saturated. Fixed by gain scheduling.</td></tr>
+    <tr><td>7 of 100 noisy frames rejected</td><td>Sensing: outermost depth points stretched <code>minAreaRect</code></td><td>Trim per side: 100/100.</td></tr>
+    <tr><td>Constant 0.71 px corner error</td><td>Frames: MuJoCo's principal point is (319.5, 239.5), not (320, 240)</td><td>0.06 px after correction.</td></tr>
+    <tr><td>Lab EKF rejecting a cube at rest (NIS about 140)</td><td>Sensing: mean of top-face points sat 5 px and 5 mm off the fitted centre</td><td>Projected centre used: 0 rejected in 301 updates.</td></tr>
+    <tr><td>Arm following a path the cube was not on, 23 cm</td><td>Estimator: constant-velocity coast during invalid frames</td><td>Velocity zeroed after 0.5 s blind, and no stop declared while blind.</td></tr>
+    <tr><td>Stop never declared at rest in the lab</td><td>Tuning: EKF speed reached 9.3 mm/s against a 5 mm/s threshold</td><td>Raised to 8 mm/s. Two hardware runs since.</td></tr>
+  </tbody></table></div>
+  <h3>Extension: occluders and active perception</h3>
+  <p>Why this and not view selection for visibility? A check on true geometry showed visibility was not the problem: at hover the cube stays at least 91 % visible. What fails is collision, mostly the open fingers at the grasp pose. So the extension (branch <code>advanced</code>) estimates occluder boxes, treats unseen table as occupied, and picks another view when no grasp yaw is safe, adding up to two extra views.</p>
+  <figure>
+    <div class="plate"><div id="chart-occluders"></div></div>
+    <figcaption><strong>Trading failed grasps for refused ones.</strong> 1-3 occluders, seeds 0-49, zero margin, static cube. Active perception ended {{occ_active_collided}} trials in a mid-motion failure, against {{occ_off_collided}} when ignoring occluders, and places more: {{occ_active_placed}} against {{occ_off_placed}}. Mid-motion failures are counted from the failed state in these logs; contact logs from an earlier run on the same levels traced such failures to occluder hits, but contacts were not logged again here. Logs: <a href="data/logs/l1_off.log">off</a>, <a href="data/logs/l1_conservative.log">conservative</a>, <a href="data/logs/l1_active.log">active</a>.</figcaption>
+  </figure>
+  <p>The <a href="#demo">demo video</a> shows seed 18 with occluders ignored and with active perception, recorded from branch <code>advanced</code> (9ac8d1b). In the active-perception run the zone row of the panel reads 53 mm after the extra view: the panel shows the latest capture, which saw only part of the zone, while placing uses the complete estimate from the first view (1.7 mm). Logs: <a href="data/logs/l1_seed18_contacts.log">seed 18 contacts and yaws</a> (from <a href="occluder_contacts.py">this replay script</a>). To record one: <code>python main.py --level L1 --no-moving-cube --seed 18 --occluders active --record out.mp4</code>.</p>
+  <p>On the {{occ_active_refused}} refusals: a 2026-11-01 replay of a similar set (17 seeds) found 7 where every yaw truly collides, so the refusal was right; 6 with only millimetres of clearance that the conservative gripper model rejects; and 4 lost to estimate or view conservatism. Top-down grasps at four yaws set a ceiling: with the true occluder boxes, only 77 of 100 seeds have a feasible yaw at zero margin. This extension is simulation only, and it uses a sampler prior (cube-occluder spacing) that a real scene need not satisfy.</p>
+</section>
+
+<section id="hardware">
+  <h2>Real robot</h2>
+  <p>The pipeline moved to a UTS UR3e with an OnRobot RG2 and a fixed D435i, a 60 mm printed cube, and a person pushing the cube with a ruler or by hand. Lab session: 2 November 2026. Same perception, EKF, planning and state machine, through a subclass; settings that differ live in <code>src/real/config.py</code>.</p>
+  {{tbl_hw}}
+  <div class="note limit">
+    <p><strong>What these counts do and do not support.</strong> They are not the success rate of one code version. Estimation, EKF, stop test and tolerances changed through the day. The final code (4 s window, 8 mm/s) has two moving-cube runs, both completed. A planned statistics session on fixed code did not take place. The hardware result shows the pipeline works on the real sensor and platform; it does not give a measured reliability.</p>
+  </div>
+  <h3>Simulation against hardware</h3>
+  {{tbl_simhw}}
+  <p class="caption"><strong>Read with care: the conditions differ.</strong> The simulated columns run <code>scripts/run_real.py --sim</code>, the same velocity loop and fixed camera, but a 50 mm cube, scripted motion, and the simulation's estimation settings (2 s stop window, not 4 s). The 5-6 cm/s runs (<code>scripts/lab_sim_fast.py</code>) use seeds 0, 1, 4, 5, 6, 8, 9, 10, 11, 13, as the other seeds tried had no valid path at that speed. Tracking and frame rows cover completed runs only. The one stop in {{fast_n}} was the 0.15 rad tracking limit during DESCEND. <a href="data/lab_runs.csv">Per-run data</a>, <a href="data/logs/lab_sim/fast_1.log">that log</a>. Static lab pipeline in simulation: {{sim_static}}.</p>
+  <p><strong>Where they differ.</strong> Compared with scripted motion at 5-6 cm/s, hardware rejects about three times as many frames and re-initialises about six times as often, and median tracking error is higher (5.0 against 3.5 mm). The largest errors are of similar size in both. A hand reverses and accelerates sharply, which a constant-velocity filter treats as outliers, and above about 5 cm/s the joints reach the 0.35 rad/s limit. Noise on a cube at rest does not explain it: in a stationary check after the measurement fix, 301 updates gave no rejections, at one position. The causes of the largest simulated errors were not investigated.</p>
+  <p><strong>Placement.</strong> Across the {{placed_n}} moving runs that logged it, the camera's estimate of the placed cube varied by {{placed_x}} mm in x and {{placed_y}} mm in y, with yaw {{placed_yaw_lo}}&deg; to {{placed_yaw_hi}}&deg; after squaring to the base axes. That is repeatability, measured with a camera that has a position-dependent bias (about &#8722;18 mm at the place point). A ruler check of one placement found it close to the target; this was coarse, and not repeated. So hardware place error has no reported number.</p>
+</section>
+
+<section id="limits">
+  <h2>Limits of the approach</h2>
+  <h3>Simulation</h3>
+  <ul>
+    <li><strong>The last 65 mm of descent are open loop.</strong> Below 60 mm the cube leaves the wrist camera's field of view, so vision cannot correct the final move.</li>
+    <li><strong>The place zone is seen only once, at OBSERVE.</strong> Under a 2&deg; mount error, PBVS cuts the grasp offset (6.1 against 9.3 mm) but not the place error.</li>
+    <li><strong>Modelled depth noise is a placeholder.</strong> \(k\) = 0.01 was set from a specification. The lab measured \(k \approx 0.0022\) temporal, but with spatial error near 3 mm that the model does not include.</li>
+    <li><strong>The largest tracking errors are unexplained.</strong> Their causes in simulation were not investigated.</li>
+  </ul>
+  <h3>Extension</h3>
+  <ul>
+    <li><strong>Simulation only, static cube.</strong> Active perception was not run on the robot or with a moving cube.</li>
+    <li><strong>Top-down grasps at four yaws set a ceiling.</strong> With the true occluder boxes, only 77 of 100 seeds have a feasible yaw at zero margin.</li>
+    <li><strong>It relies on a sampler prior.</strong> It uses the cube-occluder spacing of the simulated scenes, which a real scene need not satisfy.</li>
+  </ul>
+  <h3>Real robot</h3>
+  <ul>
+    <li><strong>Lab grasp correction is by eye at one position.</strong> Offset (+9, &#8722;4) mm was aligned by hand, while the bias elsewhere is about (&#8722;18, +3) mm. Grasps succeed thanks to a roughly 10 mm finger margin and gripper self-centring. Likely cause: the top-face fit lacks the near edge when viewed obliquely. Not verified.</li>
+    <li><strong>Lab tool length is a working value.</strong> <code>--tcp-mm 225</code> gives the right grasp height, but the ruler gives 195 mm and the difference is not explained. So the fingertip height floor in the safety limits does not match reality and cannot be relied on to prevent a table collision.</li>
+    <li><strong>The lab EKF measurement is not independent.</strong> The projected rectangle centre replaced the point mean, so NIS there means something different from simulation. Lab truth does not exist, so NEES is unavailable.</li>
+    <li><strong>Colour thresholds were not tuned on the lab camera.</strong> A hand gripping the cube stretched the blob to about 69 &times; 97 mm; whether the hand was inside the threshold or the cube was lifted was not settled.</li>
+    <li><strong>A cube rotating in TRACK.</strong> The lab wrist does not follow the yaw, since EKF yaw can flip 90&deg; at &plusmn;45&deg;; it adjusts once before grasping.</li>
+  </ul>
+  <p><strong>What I would change:</strong> fix one code version and run static and moving sets with a measured place error; estimate the camera bias across the plate with cubes at known positions; add a pause-aware motion model, such as an interacting multiple model filter, in place of a longer stop window.</p>
+</section>
+
+<section id="run">
+  <h2>Code, install and run</h2>
+  <p>Requires git and <a href="https://docs.astral.sh/uv/">uv</a> or Python 3.12. Hardware is not needed for anything except <code>run_real.py</code> without <code>--sim</code>.</p>
+  <div class="table-wrap"><table><thead><tr><th>Branch</th><th>Contents</th><th>Code</th><th>Zip</th></tr></thead><tbody>
+    <tr><td><code>main</code></td><td>The simulation</td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/tree/main">Browse</a></td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/archive/refs/heads/main.zip">Download</a></td></tr>
+    <tr><td><code>real</code></td><td><code>main</code>, with the same simulation code, plus the lab robot code. The commands below use it</td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/tree/real">Browse</a></td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/archive/refs/heads/real.zip">Download</a></td></tr>
+    <tr><td><code>advanced</code></td><td><code>main</code> plus the occluder extension, without the lab robot code</td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/tree/advanced">Browse</a></td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/archive/refs/heads/advanced.zip">Download</a></td></tr>
+    <tr><td><code>github_page</code></td><td>This page, its logs and its build script</td><td><a href="https://github.com/treap45/42043_Integrated_Project_AVRC/tree/github_page">Browse</a></td><td>-</td></tr>
+  </tbody></table></div>
+<p class="caption">GitHub zip downloads leave out git submodules, so to run the code use the clone command below.</p>
+<pre><code>git clone --recursive --branch real https://github.com/treap45/42043_Integrated_Project_AVRC.git
+cd 42043_Integrated_Project_AVRC
+uv venv --python 3.12 --seed .venv &amp;&amp; source .venv/bin/activate
+uv pip install -r requirements.txt
+export MUJOCO_GL=egl             # or osmesa without a GPU
+
+python main.py                                   # the default task, with a live window
+python main.py --trials 20 --no-window           # seeds 0-19, prints the success rate
+python main.py --no-moving-cube --approach pbvs --push-cube 0.025
+python scripts/plot_cube_ekf.py --seed 0         # the estimate and uncertainty figure
+python scripts/watch_motion.py --motion arc      # harder motion, one live run in a window
+python scripts/watch_motion.py --motion s_curve
+python scripts/run_real.py --sim --mode moving --hover-mm 150 --v-max 0.10
+bash scripts/evaluate_all.sh                     # the simulation experiments, about an hour</code></pre>
+  <p>Occluder extension: <code>git checkout advanced</code>, then <code>python main.py --level L1 --no-moving-cube --occluders active</code>. For the reported set, add <code>--no-window --trials 50</code>, and use <code>--occluders conservative</code> or leave the option out for the other two logs. <code>evaluate_all.sh</code> does not include these runs, because it is not on that branch. The calibration and the lab pipeline in simulation also run separately: <code>scripts/calibrate_camera.py</code>, which overwrites <code>configs/camera_calib.json</code>, and <code>scripts/run_real.py --sim</code>.</p>
+  <div class="table-wrap"><table><thead><tr><th>Path</th><th>Contents</th></tr></thead><tbody>
+    <tr><td><code>main.py</code></td><td>Entry point and evaluator (the only place the pipeline's truth is read)</td></tr>
+    <tr><td><code>assets/</code>, <code>configs/</code></td><td>Scene and controller models; calibration results</td></tr>
+    <tr><td><code>src/sim/</code></td><td>Simulation interface, sensor noise, randomisation</td></tr>
+    <tr><td><code>src/model/</code></td><td>Joint state-space model, controller-side robot model</td></tr>
+    <tr><td><code>src/perception/</code></td><td>Segmentation, projection, cube and zone estimates, calibration</td></tr>
+    <tr><td><code>src/estimation/</code></td><td>Joint KF, cube EKF, world-frame KF, coordinated-turn EKF</td></tr>
+    <tr><td><code>src/control/</code></td><td>LQR, PD, arm controller, PBVS</td></tr>
+    <tr><td><code>src/planning/</code>, <code>src/task/</code></td><td>IK, trajectories, grasp poses; the state machine</td></tr>
+    <tr><td><code>src/real/</code></td><td>Camera, RTDE, RG2, safety limits, eye-to-hand calibration, lab settings</td></tr>
+    <tr><td><code>scripts/</code></td><td>Checks with PASS or FAIL, experiments, lab run</td></tr>
+  </tbody></table></div>
+</section>
+
+<section id="statements">
+  <h2>Statements</h2>
+  <h3>Individual contribution</h3>
+  <p>Tianyang Shen is the only team member and is responsible for all of the submitted work. Written by the author: the joint state-space model, joint Kalman filter, LQR and PD design, perception, calibration workflow, IK and trajectory planning, the task state machine, the PBVS law, the cube EKF and the world-frame KF, and the occluder estimate. The author also chose the task, the methods and their parameters, and ran the hardware at the robot. Written with generative AI at the author's direction and reviewed by the author: the simulation scene and interface, sensor noise models, the entry point and evaluator, test and evaluation scripts, the TRACK state and gain scheduling, the real-robot interface and tooling, the coordinated-turn EKF, and the occluder clearance and next-view modules.</p>
+  <h3>Generative AI declaration</h3>
+  <p>Tool: Claude Code (Anthropic). Purpose: setting up the environment and simulation; writing test, demo and evaluation scripts; reviewing and revising the author's code; writing parts of the controller, estimator and extension code, and the real-robot interface and calibration tooling, at the author's direction; building this project page; drafting the demo video's voice-over script and cutting the video; and explaining concepts. The video's voice-over is synthesised with Kokoro, a text-to-speech model, run locally. All AI-assisted code was reviewed and tested by the author.</p>
+  <h3>Acknowledgements</h3>
+  <ul>
+    <li><strong>Robot model:</strong> UR3e MJCF from <a href="https://github.com/SouthColumn76/universal_robots_ur3e">SouthColumn76/universal_robots_ur3e</a> (BSD-3-Clause), the model used in the course tutorial <a href="https://github.com/rFalque/mujoco_UR3_tutorial">rFalque/mujoco_UR3_tutorial</a>; arm actuators changed to torque motors.</li>
+    <li><strong>Gripper and camera models:</strong> Robotiq 2F-85 (BSD-2-Clause) and RealSense D435i (Apache-2.0) from <a href="https://github.com/google-deepmind/mujoco_menagerie">MuJoCo Menagerie</a>.</li>
+    <li><strong>Lab interface:</strong> guide repository <a href="https://github.com/UTS-RI/UR3_RG2_rosbridge">UTS-RI/UR3_RG2_rosbridge</a>; <code>ur_rtde</code>; <code>pyrealsense2</code>.</li>
+    <li><strong>Libraries:</strong> <a href="https://mujoco.org">MuJoCo</a>; OpenCV (segmentation, <code>minAreaRect</code>, <code>findChessboardCornersSB</code>, <code>calibrateCamera</code>, <code>solvePnP</code>, ArUco, <code>calibrateHandEye</code>, after F. C. Park and B. J. Martin, IEEE Trans. Robotics and Automation, 1994); SciPy (<code>solve_discrete_are</code>, <code>expm</code>, <code>CubicSpline</code>, <code>least_squares</code>); Robotics Toolbox for Python in the environment check only.</li>
+  </ul>
+</section>
+
+<footer>Numbers come from the linked logs unless a sentence labels them as a development measurement. Simulation: <code>real</code> at <code>d78812e</code>, <code>advanced</code> at <code>9ac8d1b</code>. Hardware: 2 November 2026.</footer>
+</main>
+</div>
+<script>window.SITE_DATA = {{site_data}};</script>
+<script src="assets/charts.js"></script>
+</body>
+</html>

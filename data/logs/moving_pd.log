@@ -1,0 +1,26 @@
+seed    0  SUCCESS  grasped=True   grasp offset   0.8 mm  place error    1.8 mm  sim time  26.6 s
+seed    1  SUCCESS  grasped=True   grasp offset   1.0 mm  place error    1.6 mm  sim time  26.7 s
+seed    2  SUCCESS  grasped=True   grasp offset   0.8 mm  place error    0.9 mm  sim time  26.8 s
+seed    3  SUCCESS  grasped=True   grasp offset   0.9 mm  place error    1.0 mm  sim time  26.5 s
+seed    4  SUCCESS  grasped=True   grasp offset   0.7 mm  place error    0.8 mm  sim time  26.2 s
+seed    5  SUCCESS  grasped=True   grasp offset   0.6 mm  place error    0.4 mm  sim time  26.1 s
+seed    6  SUCCESS  grasped=True   grasp offset   0.5 mm  place error    0.2 mm  sim time  25.7 s
+seed    7  SUCCESS  grasped=True   grasp offset   0.8 mm  place error    1.2 mm  sim time  26.7 s
+seed    8  SUCCESS  grasped=True   grasp offset   0.6 mm  place error    0.5 mm  sim time  27.7 s
+seed    9  SUCCESS  grasped=True   grasp offset   0.9 mm  place error    1.1 mm  sim time  27.1 s
+seed   10  SUCCESS  grasped=True   grasp offset   1.2 mm  place error    1.4 mm  sim time  27.8 s
+seed   11  SUCCESS  grasped=True   grasp offset   1.2 mm  place error    1.4 mm  sim time  26.9 s
+seed   12  SUCCESS  grasped=True   grasp offset   0.3 mm  place error    1.5 mm  sim time  27.2 s
+seed   13  SUCCESS  grasped=True   grasp offset   0.8 mm  place error    1.1 mm  sim time  27.6 s
+seed   14  SUCCESS  grasped=True   grasp offset   0.8 mm  place error    0.8 mm  sim time  25.8 s
+seed   15  SUCCESS  grasped=True   grasp offset   0.6 mm  place error    0.3 mm  sim time  27.1 s
+seed   16  SUCCESS  grasped=True   grasp offset   1.0 mm  place error    1.1 mm  sim time  26.5 s
+seed   17  SUCCESS  grasped=True   grasp offset   0.7 mm  place error    1.7 mm  sim time  28.1 s
+seed   18  SUCCESS  grasped=True   grasp offset   0.5 mm  place error    0.9 mm  sim time  26.7 s
+seed   19  SUCCESS  grasped=True   grasp offset   0.1 mm  place error    0.9 mm  sim time  28.5 s
+
+L0, PD, track, moving cube: 20/20 placed, 20/20 grasped
+place error (successful trials): median 1.0 mm, max 1.8 mm
+grasp offset (cube to TCP when lifted): median 0.8 mm, max 1.2 mm
+sim time (successful trials): median 26.8 s
+TRACK: rejected measurements 1, re-initialisations 0, stop declared 2.05 s after the true stop (median, min 1.98, max 2.16), TCP-to-cube lag while moving RMS median 0.8 mm

@@ -1,0 +1,9 @@
+# git archive advanced (9ac8d1b); python website/occluder_contacts.py --no-window --level L1 --no-moving-cube --seed 18 [--occluders active]
+## occluders off
+grasp yaw psi=-19.3 deg cube yaw=-19.3 deg
+contact t=9.63s occluder_0 <-> gripper_right_follower
+contact t=12.14s occluder_0 <-> gripper_right_coupler
+seed   18  FAIL     grasped=False  grasp offset   -   mm  place error  227.6 mm  sim time  13.6 s  (DESCEND failed)
+## occluders active
+grasp yaw psi=250.7 deg cube yaw=-19.3 deg
+seed   18  SUCCESS  grasped=True   grasp offset   0.6 mm  place error    1.9 mm  sim time  21.5 s  extra views 1

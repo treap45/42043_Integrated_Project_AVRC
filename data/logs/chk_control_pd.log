@@ -1,0 +1,32 @@
+controller mode: pd
+
+== 1. Hold at the observe pose (5 s) ==
+  with controller defaults
+    RMS error after 1 s (rad) [0.0003 0.0003 0.0003 0.0003 0.0002 0.0002]
+    final |error| (rad)           [0.0002 0.0002 0.0003 0.0003 0.0002 0.0001]
+    peak |tau| (N m)              [ 9.418  12.7434 15.0514  4.9505  3.0575  6.4115]   limits [56. 56. 28. 12. 12. 12.]
+    time saturated (%)            [0. 0. 0. 0. 0. 0.]
+    plot results/check_control/hold.png
+  without d_hat feed-forward (comparison)
+    RMS error after 1 s (rad) [0.0002 0.0034 0.0128 0.0116 0.0043 0.0002]
+    final |error| (rad)           [0.0001 0.0037 0.0126 0.0116 0.0043 0.0001]
+    peak |tau| (N m)              [ 3.9627  7.1297 11.8219  3.8162  1.7448  2.2585]   limits [56. 56. 28. 12. 12. 12.]
+    time saturated (%)            [0. 0. 0. 0. 0. 0.]
+    plot results/check_control/hold_no_ff.png
+
+== 2. Point-to-point: observe + [ 0.3  0.2 -0.2  0.2  0.3  0.5] rad in 2 s ==
+  quintic move
+    RMS error after 0 s (rad) [0.0004 0.0004 0.0005 0.0005 0.0004 0.0006]
+    final |error| (rad)           [0.0003 0.0004 0.0005 0.     0.0002 0.    ]
+    peak |tau| (N m)              [ 8.7943 13.0982 13.9278  5.1279  3.4701  6.4107]   limits [56. 56. 28. 12. 12. 12.]
+    time saturated (%)            [0. 0. 0. 0. 0. 0.]
+    plot results/check_control/move.png
+
+== 3. Torque impulse: 40 N m for 100 ms on lift at t = 0.5 s ==
+    peak deviation 0.0183 rad, back within 0.01 rad after 0.194 s
+    plot results/check_control/impulse.png
+
+== Summary ==
+  hold     PASS
+  track    PASS
+  impulse  PASS

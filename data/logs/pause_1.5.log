@@ -1,0 +1,26 @@
+seed   0  OK   grasped=True  stop_delay 3.422099037595549  place    2.5 mm  
+seed   1  OK   grasped=True  stop_delay 2.6056081768572668  place    2.6 mm  
+seed   2  OK   grasped=True  stop_delay 2.2821227623005917  place    1.2 mm  
+seed   3  OK   grasped=True  stop_delay 2.054525464953654  place    1.8 mm  
+seed   4  OK   grasped=True  stop_delay 2.938838070358509  place    1.4 mm  
+seed   5  OK   grasped=True  stop_delay 2.418154582598426  place    1.4 mm  
+seed   6  OK   grasped=True  stop_delay 4.297272228800626  place    0.7 mm  
+seed   7  OK   grasped=True  stop_delay 2.3226975670999206  place    1.2 mm  
+seed   8  OK   grasped=True  stop_delay 2.3461414043014557  place    1.0 mm  
+seed   9  OK   grasped=True  stop_delay 2.5026025239224143  place    0.6 mm  
+seed  10  OK   grasped=True  stop_delay 2.272798016513679  place    1.8 mm  
+seed  11  OK   grasped=True  stop_delay 2.327507925105552  place    1.2 mm  
+seed  12  OK   grasped=True  stop_delay 2.0637969883122267  place    1.5 mm  
+seed  13  OK   grasped=True  stop_delay 2.2460200325658395  place    0.2 mm  
+seed  14  OK   grasped=True  stop_delay 2.328007409511363  place    0.7 mm  
+seed  15  OK   grasped=True  stop_delay 2.3410856748809543  place    0.5 mm  
+seed  16  OK   grasped=True  stop_delay 2.504078023633287  place    1.2 mm  
+seed  17  OK   grasped=True  stop_delay 2.0559581467912764  place    0.9 mm  
+seed  18  OK   grasped=True  stop_delay 2.062780418048513  place    0.3 mm  
+seed  19  OK   grasped=True  stop_delay 2.049734172820701  place    0.6 mm  
+
+long_pause cv speed [0.02, 0.03] pause 1.5: placed 20/20, grasped 20/20
+  stop declared early 0, late delay median 2.33 s, no stop 0
+  grasp offset median 0.9 mm, max 1.7 mm
+  place error median 1.2 mm, max 2.6 mm
+  rejected 111, reinit 51, failures {}

@@ -1,0 +1,13 @@
+trial 0: 20 views, rotation spread 144 deg, camera distance 0.75 m
+  Park residuals: position 3.12 mm mean, rotation 0.60 deg mean, reprojection 0.83 px mean
+  T_ee_marker error 0.92 mm
+
+20 trials, 20 views, 80 mm marker, 0.3 px noise: T_base_cam error, median / max
+  Park       position   4.39 /  13.24 mm   rotation 0.321 / 0.940 deg
+  Tsai       position   4.47 /  12.96 mm   rotation 0.346 / 0.847 deg
+  Horaud     position   4.33 /  13.26 mm   rotation 0.313 / 0.952 deg
+  Andreff    position  25.23 /  70.25 mm   rotation 0.315 / 0.894 deg
+  Daniilidis position   2.93 /  10.40 mm   rotation 0.336 / 0.817 deg
+  Park + refine position   0.54 /   1.25 mm   rotation 0.043 / 0.101 deg
+
+PASS (Park + refine: max position < 3.0 mm, max rotation < 0.5 deg)

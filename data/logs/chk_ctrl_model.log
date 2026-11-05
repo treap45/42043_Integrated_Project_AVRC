@@ -1,0 +1,19 @@
+== 1. Model ==
+  controller model: nq=6 nv=6, armature [0.1 0.1 0.1 0.1 0.1 0.1]
+  moving arm links: plant 8.630 kg, controller 8.630 kg
+  unmodelled payload (everything below the flange in the plant): 1.175 kg
+
+== 2. Kinematics (500 random q; flange, tcp, wrist_cam) ==
+  max position error 0.00e+00 m, max rotation matrix error 0.00e+00  PASS
+
+== 3. Payload mismatch (plant minus controller model) ==
+  joint      gravity at observe   max |gravity| diff   diag M diff (median)
+  pan                  0.000 Nm             0.000 Nm                 19.5 %
+  lift                -1.781 Nm             6.646 Nm                 20.4 %
+  elbow               -3.253 Nm             4.248 Nm                 24.9 %
+  wrist1              -1.344 Nm             1.888 Nm                 15.9 %
+  wrist2               0.445 Nm             1.569 Nm                 18.4 %
+  wrist3               0.007 Nm             0.095 Nm                  1.4 %
+
+== Summary ==
+  kinematics   PASS

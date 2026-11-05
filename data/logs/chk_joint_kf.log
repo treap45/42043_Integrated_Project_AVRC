@@ -1,0 +1,18 @@
+== 1. Van Loan process noise ==
+  matches direct integration, symmetric, PSD: PASS
+
+== 2. Sinusoidal excitation, sigma_d sweep (4 s, first 1 s discarded) ==
+  sigma_d     3:  qd RMS [0.147 0.159 0.296 0.088 0.176 0.035]  NEES[q,qd] [ 34.388  81.887 140.064   6.06   19.774   1.367]  NIS [ 3.163  5.109 10.572  1.334  2.778  0.931]
+  sigma_d    10:  qd RMS [0.109 0.121 0.21  0.08  0.128 0.063]  NEES[q,qd] [ 5.971 14.918 20.637  1.815  3.337  1.306]  NIS [1.422 1.985 3.141 0.959 1.235 0.892]
+  sigma_d    30:  qd RMS [0.098 0.095 0.157 0.109 0.132 0.113]  NEES[q,qd] [1.889 3.36  3.961 1.269 1.473 1.261]  NIS [0.999 1.128 1.434 0.845 0.899 0.844]
+  sigma_d   100:  qd RMS [0.138 0.1   0.163 0.197 0.215 0.219]  NEES[q,qd] [1.28  1.379 1.551 1.14  1.186 1.211]  NIS [0.843 0.87  0.982 0.757 0.764 0.767]
+  sigma_d   300:  qd RMS [0.239 0.156 0.255 0.362 0.388 0.404]  NEES[q,qd] [1.164 1.115 1.273 1.057 1.086 1.132]  NIS [0.748 0.781 0.835 0.663 0.651 0.659]
+  finite-difference qd RMS [0.365 0.358 0.384 0.361 0.361 0.358]
+
+  default sigma_d = 30: KF beats finite differences on every joint, NEES and NIS in range: PASS
+  d tracking in this test (RMS error / RMS true d): [ 1.03   1.043  0.962  1.442  1.019 17.796]  (not checked: d varies at the excitation frequency here)
+  plot saved to results/check_joint_kf/sigma_d_sweep.png
+
+== Summary ==
+  process noise PASS
+  joint KF      PASS

@@ -1,0 +1,57 @@
+seed    0  FAIL     grasped=False  grasp offset   -   mm  place error  225.8 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    1  FAIL     grasped=False  grasp offset   -   mm  place error  251.7 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    2  FAIL     grasped=False  grasp offset   -   mm  place error  183.9 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    3  FAIL     grasped=False  grasp offset   -   mm  place error  242.7 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    4  FAIL     grasped=False  grasp offset   -   mm  place error  168.7 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    5  FAIL     grasped=False  grasp offset   -   mm  place error  225.5 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    6  FAIL     grasped=False  grasp offset   -   mm  place error  197.6 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    7  FAIL     grasped=False  grasp offset   -   mm  place error  211.6 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    8  FAIL     grasped=False  grasp offset   -   mm  place error  213.4 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed    9  FAIL     grasped=False  grasp offset   -   mm  place error  212.5 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   10  FAIL     grasped=False  grasp offset   -   mm  place error  232.1 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   11  FAIL     grasped=False  grasp offset   -   mm  place error  180.1 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   12  FAIL     grasped=False  grasp offset   -   mm  place error  229.4 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   13  FAIL     grasped=False  grasp offset   -   mm  place error  258.9 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   14  FAIL     grasped=False  grasp offset   -   mm  place error  191.5 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   15  FAIL     grasped=False  grasp offset   -   mm  place error  237.2 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   16  FAIL     grasped=False  grasp offset   -   mm  place error  183.6 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   17  FAIL     grasped=False  grasp offset   -   mm  place error  231.4 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   18  FAIL     grasped=False  grasp offset   -   mm  place error  227.6 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   19  FAIL     grasped=False  grasp offset   -   mm  place error  252.0 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   20  FAIL     grasped=False  grasp offset   -   mm  place error  170.6 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   21  SUCCESS  grasped=True   grasp offset   1.4 mm  place error    0.1 mm  sim time  26.6 s
+seed   22  SUCCESS  grasped=True   grasp offset   0.7 mm  place error    1.6 mm  sim time  18.9 s
+seed   23  SUCCESS  grasped=True   grasp offset   1.2 mm  place error    1.5 mm  sim time  31.8 s
+seed   24  SUCCESS  grasped=True   grasp offset   0.4 mm  place error    1.0 mm  sim time  27.2 s
+seed   25  FAIL     grasped=False  grasp offset   -   mm  place error  195.0 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   26  FAIL     grasped=False  grasp offset   -   mm  place error  187.1 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   27  FAIL     grasped=False  grasp offset   -   mm  place error  164.6 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   28  FAIL     grasped=False  grasp offset   -   mm  place error  214.2 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   29  FAIL     grasped=False  grasp offset   -   mm  place error  206.1 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   30  SUCCESS  grasped=True   grasp offset   1.3 mm  place error    1.8 mm  sim time  21.5 s
+seed   31  FAIL     grasped=False  grasp offset   -   mm  place error  254.1 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   32  FAIL     grasped=False  grasp offset   -   mm  place error  167.3 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   33  FAIL     grasped=False  grasp offset   -   mm  place error  155.7 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   34  FAIL     grasped=False  grasp offset   -   mm  place error  275.7 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   35  SUCCESS  grasped=True   grasp offset   1.3 mm  place error    1.0 mm  sim time  21.2 s
+seed   36  SUCCESS  grasped=True   grasp offset   1.0 mm  place error    2.3 mm  sim time  21.9 s
+seed   37  SUCCESS  grasped=True   grasp offset   0.7 mm  place error    2.4 mm  sim time  32.3 s
+seed   38  FAIL     grasped=False  grasp offset   -   mm  place error  193.4 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   39  SUCCESS  grasped=True   grasp offset   0.9 mm  place error    1.1 mm  sim time  21.2 s
+seed   40  SUCCESS  grasped=True   grasp offset   1.1 mm  place error    0.6 mm  sim time  29.5 s
+seed   41  FAIL     grasped=False  grasp offset   -   mm  place error  213.5 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   42  SUCCESS  grasped=True   grasp offset   0.6 mm  place error    2.0 mm  sim time  35.0 s
+seed   43  FAIL     grasped=False  grasp offset   -   mm  place error  273.5 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   44  SUCCESS  grasped=True   grasp offset   0.1 mm  place error    1.3 mm  sim time  21.4 s
+seed   45  FAIL     grasped=False  grasp offset   -   mm  place error  158.1 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   46  FAIL     grasped=False  grasp offset   -   mm  place error  240.3 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   47  FAIL     grasped=False  grasp offset   -   mm  place error  230.3 mm  sim time   0.2 s  (no collision-free grasp yaw)
+seed   48  SUCCESS  grasped=True   grasp offset   0.7 mm  place error    1.1 mm  sim time  20.2 s
+seed   49  FAIL     grasped=False  grasp offset   -   mm  place error  152.5 mm  sim time   0.2 s  (no collision-free grasp yaw)
+
+L1, LQR, track, occluders conservative (margin 0 mm): 13/50 placed, 13/50 grasped
+place error (successful trials): median 1.3 mm, max 2.4 mm
+grasp offset (cube to TCP when lifted): median 0.9 mm, max 1.4 mm
+sim time (successful trials): median 21.9 s
+TRACK: rejected measurements 0, re-initialisations 0
+failed in criteria: seeds [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 25, 26, 27, 28, 29, 31, 32, 33, 34, 38, 41, 43, 45, 46, 47, 49]

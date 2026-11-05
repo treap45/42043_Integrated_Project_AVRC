@@ -1,0 +1,47 @@
+intrinsics: board detected in 20 of 35 placements
+hand-eye: 15 usable views, 0 skipped (not settled or board not detected)
+{
+  "intrinsics": {
+    "estimate_px": {
+      "fx": 625.4788485147785,
+      "fy": 625.5276721857641,
+      "cx": 319.5102761798581,
+      "cy": 239.1280596609896
+    },
+    "true_px": {
+      "fx": 625.2213755265124,
+      "fy": 625.2213755265124,
+      "cx": 319.5,
+      "cy": 239.5
+    },
+    "error_px": {
+      "fx": 0.2574729882661586,
+      "fy": 0.30629665925175686,
+      "cx": 0.010276179858124124,
+      "cy": -0.3719403390103935
+    },
+    "dist": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rms_reprojection_px": 0.1094973391931702
+  },
+  "hand_eye": {
+    "rotation_error_deg": 0.14548777013406644,
+    "translation_error_mm": 2.0362052882162702,
+    "t_estimate_mm": [
+      0.8194364174105486,
+      -83.17326077615859,
+      -121.5208078756933
+    ],
+    "t_true_mm": [
+      0.04815988523207426,
+      -84.98293979218145,
+      -120.99514035183707
+    ]
+  }
+}
+saved configs/camera_calib.json

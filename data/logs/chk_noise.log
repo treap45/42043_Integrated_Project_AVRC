@@ -1,0 +1,12 @@
+== 1. Noise off ==
+  read_camera() equals the exact render: PASS
+
+== 2. Noise statistics (10 seeds, observe pose) ==
+  depth error / sigma_z(d, theta): mean +0.000, std 1.019 (expected ~1.02)  PASS
+  RGB error std 1.99 (configured 2.0)  PASS
+  edge pixels dropped 0.50 (configured 0.5), invalid away from edges 0.0e+00  PASS
+
+== 3. Reproducibility ==
+  same seed gives the same noisy frame, display reads do not change it: PASS
+
+Overall: PASS

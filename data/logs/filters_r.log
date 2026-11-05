@@ -1,0 +1,14 @@
+cube speed (0.03, 0.04) m/s, duration (6.0, 8.0) s; NEES is the median while the cube moves
+line: 20 seeds, 2948 frames
+  KF, R x 0.1          pos  0.99 mm  vel  3.19 mm/s  NEES  118.16  NIS/m  1.00  rej 133 reinit  40  stop  4.07 s (17/20)  gap  2.45 mm (max  5.13)
+  EKF, R x 0.1         pos  1.01 mm  vel  3.74 mm/s  NEES  287.96  NIS/m  1.09  rej 224 reinit  40  stop  3.25 s (4/20)  gap  3.11 mm (max  5.61)
+  EKF sigma_a 0.03, R x 0.1 pos  0.99 mm  vel  4.98 mm/s  NEES  259.20  NIS/m  0.55  rej  45 reinit   5  stop   nan s (0/20)  gap  3.72 mm (max  7.45)
+  CT-EKF, R x 0.1      pos  1.02 mm  vel  3.90 mm/s  NEES  288.67  NIS/m  1.10  rej 220 reinit  40  stop  3.25 s (4/20)  gap  3.75 mm (max  6.65)
+  KF, R x 1            pos  0.98 mm  vel  1.67 mm/s  NEES   17.06  NIS/m  0.19  rej  80 reinit  40  stop  2.24 s (20/20)  gap  1.72 mm (max  3.22)
+  EKF, R x 1           pos  0.98 mm  vel  2.14 mm/s  NEES   40.33  NIS/m  0.29  rej  80 reinit  40  stop  2.22 s (20/20)  gap  1.99 mm (max  4.31)
+  EKF sigma_a 0.03, R x 1 pos  0.99 mm  vel  3.73 mm/s  NEES   29.91  NIS/m  0.19  rej  14 reinit   1  stop  3.33 s (4/20)  gap  3.30 mm (max  5.58)
+  CT-EKF, R x 1        pos  0.98 mm  vel  2.21 mm/s  NEES   40.31  NIS/m  0.29  rej  80 reinit  40  stop  2.22 s (20/20)  gap  2.21 mm (max  5.90)
+  KF, R x 10           pos  0.96 mm  vel  0.91 mm/s  NEES    2.62  NIS/m  0.12  rej   2 reinit   1  stop  2.34 s (20/20)  gap  0.99 mm (max  1.79)
+  EKF, R x 10          pos  0.97 mm  vel  1.05 mm/s  NEES    6.14  NIS/m  0.09  rej  24 reinit  12  stop  2.24 s (20/20)  gap  1.27 mm (max  2.31)
+  EKF sigma_a 0.03, R x 10 pos  0.98 mm  vel  2.02 mm/s  NEES    4.13  NIS/m  0.05  rej   0 reinit   0  stop  2.10 s (20/20)  gap  1.94 mm (max  4.23)
+  CT-EKF, R x 10       pos  0.97 mm  vel  1.12 mm/s  NEES    6.14  NIS/m  0.09  rej  24 reinit  12  stop  2.24 s (20/20)  gap  1.33 mm (max  2.69)

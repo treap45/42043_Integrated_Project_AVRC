@@ -1,0 +1,25 @@
+settings: src.planning.grasp.HOVER 0.1 -> 0.15, src.task.pick_place.TRANSIT_V_MAX 0.15 -> 0.1, GoalRelativeQuintic v_peak 0.1 -> 0.07500000000000001
+camera: mujoco fixed_cam, at [ 0.85 -0.5   1.3 ] m (world)
+
+OK: done (48.6 s pipeline time, 43.0 s wall)
+  START      ok    0.20 s  
+  FIND       ok    0.00 s  
+  TRACK      ok    8.00 s  
+  MEASURE    ok    0.00 s  
+  PREGRASP   ok    1.00 s  
+  DESCEND    ok    6.00 s  
+  GRASP      ok    0.50 s  
+  LIFT       ok    6.00 s  
+  TRANSPORT  ok    4.27 s  
+  PLACE      ok    6.00 s  
+  RELEASE    ok    0.50 s  
+  RETREAT    ok    6.00 s  
+  RETURN     ok    5.92 s  
+  MEASURE_PLACED ok    0.00 s  
+  camera cube height minus the known height: +0.2 mm median (40 estimates); a few mm off means calibration or --table-z-mm is off
+  cube measured at (-0.4169, -0.0595) m RTDE base, yaw +1.9 deg, grasp offset [0.0, 0.0] mm
+  placed cube seen at (-0.3013, -0.1182) m RTDE base, yaw -1.0 deg
+  TRACK: 81 vision updates, 1 without the cube, 17 rejected, 2 re-initialised
+  stop declared at 8.20 s (true stop 4.50 s)
+  sim truth: cube at [0.299 0.12  0.775], 1.1 mm from the place position
+  log: results/real_runs/20261103_153327/run.json

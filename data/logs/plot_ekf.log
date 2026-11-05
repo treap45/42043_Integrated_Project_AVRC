@@ -1,0 +1,8 @@
+seed 0: pipeline OK
+  TRACK 0.2-11.5 s, 114 camera frames: accepted 114
+  position error RMS 0.89 mm, max 1.63 mm
+  velocity error RMS 2.54 mm/s
+  NIS mean 1.28 (consistent: 4)
+  stop: true 9.52 s, declared 11.50 s (delay 1.98 s)
+  TCP to cube while hovering above the moving cube: RMS 0.83 mm
+  wrote results/check_cube_ekf/track_seed0.png and results/check_cube_ekf/track_seed0.csv

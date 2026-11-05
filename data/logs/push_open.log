@@ -1,0 +1,26 @@
+seed    0  FAIL     grasped=True   grasp offset  22.9 mm  place error   22.1 mm  sim time  14.3 s  (success criteria not met)
+seed    1  FAIL     grasped=True   grasp offset  26.6 mm  place error   25.5 mm  sim time  16.0 s  (success criteria not met)
+seed    2  FAIL     grasped=False  grasp offset   -   mm  place error  189.5 mm  sim time  15.5 s  (success criteria not met)
+seed    3  FAIL     grasped=False  grasp offset   -   mm  place error  124.8 mm  sim time  14.2 s  (success criteria not met)
+seed    4  FAIL     grasped=True   grasp offset  19.6 mm  place error   20.2 mm  sim time  15.1 s  (success criteria not met)
+seed    5  FAIL     grasped=False  grasp offset   -   mm  place error  250.7 mm  sim time   7.7 s  (DESCEND failed)
+seed    6  FAIL     grasped=False  grasp offset   -   mm  place error  179.3 mm  sim time   7.7 s  (LIFT failed)
+seed    7  FAIL     grasped=False  grasp offset   -   mm  place error  191.4 mm  sim time   7.9 s  (LIFT failed)
+seed    8  FAIL     grasped=True   grasp offset  27.7 mm  place error   26.4 mm  sim time  16.2 s  (success criteria not met)
+seed    9  FAIL     grasped=False  grasp offset   -   mm  place error  160.1 mm  sim time   7.5 s  (LIFT failed)
+seed   10  FAIL     grasped=False  grasp offset  14.9 mm  place error   39.0 mm  sim time  15.8 s  (success criteria not met)
+seed   11  FAIL     grasped=False  grasp offset   -   mm  place error  195.4 mm  sim time   6.5 s  (LIFT failed)
+seed   12  FAIL     grasped=True   grasp offset  29.2 mm  place error   25.6 mm  sim time  16.2 s  (success criteria not met)
+seed   13  FAIL     grasped=False  grasp offset   -   mm  place error  253.2 mm  sim time   7.9 s  (LIFT failed)
+seed   14  FAIL     grasped=False  grasp offset   -   mm  place error  153.5 mm  sim time  16.9 s  (success criteria not met)
+seed   15  FAIL     grasped=True   grasp offset  26.8 mm  place error   26.1 mm  sim time  16.6 s  (success criteria not met)
+seed   16  FAIL     grasped=True   grasp offset  24.6 mm  place error   25.3 mm  sim time  14.9 s  (success criteria not met)
+seed   17  FAIL     grasped=False  grasp offset   -   mm  place error  159.1 mm  sim time   7.7 s  (LIFT failed)
+seed   18  FAIL     grasped=True   grasp offset  26.6 mm  place error   25.4 mm  sim time  15.6 s  (success criteria not met)
+seed   19  FAIL     grasped=True   grasp offset  28.5 mm  place error   25.9 mm  sim time  17.0 s  (success criteria not met)
+
+L0, LQR, open, push 25 mm at approach_start: 0/20 placed, 9/20 grasped
+grasp offset (cube to TCP when lifted): median 26.6 mm, max 29.2 mm
+failed in criteria: seeds [0, 1, 2, 3, 4, 8, 10, 12, 14, 15, 16, 18, 19]
+failed in DESCEND: seeds [5]
+failed in LIFT: seeds [6, 7, 9, 11, 13, 17]

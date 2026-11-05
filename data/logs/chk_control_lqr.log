@@ -1,0 +1,32 @@
+controller mode: lqr
+
+== 1. Hold at the observe pose (5 s) ==
+  with controller defaults
+    RMS error after 1 s (rad) [0.0004 0.0003 0.0003 0.0003 0.0003 0.0003]
+    final |error| (rad)           [0.0004 0.     0.0004 0.0001 0.0003 0.    ]
+    peak |tau| (N m)              [14.3566 16.276  16.2476  5.6562  3.9165  7.75  ]   limits [56. 56. 28. 12. 12. 12.]
+    time saturated (%)            [0. 0. 0. 0. 0. 0.]
+    plot results/check_control_lqr/hold.png
+  without d_hat feed-forward (comparison)
+    RMS error after 1 s (rad) [0.0003 0.001  0.0036 0.0037 0.0012 0.0002]
+    final |error| (rad)           [0.0001 0.0013 0.0032 0.0038 0.0011 0.0001]
+    peak |tau| (N m)              [ 8.9412 10.1503 13.8127  4.6022  2.5654  3.6055]   limits [56. 56. 28. 12. 12. 12.]
+    time saturated (%)            [0. 0. 0. 0. 0. 0.]
+    plot results/check_control_lqr/hold_no_ff.png
+
+== 2. Point-to-point: observe + [ 0.3  0.2 -0.2  0.2  0.3  0.5] rad in 2 s ==
+  quintic move
+    RMS error after 0 s (rad) [0.0005 0.0004 0.0004 0.0004 0.0004 0.0005]
+    final |error| (rad)           [0.0006 0.0004 0.0005 0.0002 0.0001 0.    ]
+    peak |tau| (N m)              [13.9405 16.2952 16.2286  5.4908  4.3319  7.7488]   limits [56. 56. 28. 12. 12. 12.]
+    time saturated (%)            [0. 0. 0. 0. 0. 0.]
+    plot results/check_control_lqr/move.png
+
+== 3. Torque impulse: 40 N m for 100 ms on lift at t = 0.5 s ==
+    peak deviation 0.0122 rad, back within 0.01 rad after 0.148 s
+    plot results/check_control_lqr/impulse.png
+
+== Summary ==
+  hold     PASS
+  track    PASS
+  impulse  PASS
